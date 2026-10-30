@@ -1,0 +1,123 @@
+{
+  "id": "retry-classes",
+  "title": "Retries follow the operation class: a lost answer is retried for reads, naturally idempotent writes and keyed writes, and NEVER for a mutation that has no key and is not idempotent",
+  "setup": [
+    {
+      "name": "meter",
+      "http": {
+        "method": "POST",
+        "path": "/v1/meters",
+        "body": { "key": "tokens", "unitsPerCredit": 1000 }
+      },
+      "expect": { "status": [200, 201] }
+    },
+    {
+      "name": "plan",
+      "http": {
+        "method": "POST",
+        "path": "/v1/plans",
+        "body": {
+          "key": "starter-{{run}}",
+          "name": "Starter",
+          "includedCredits": 100,
+          "meter": "tokens",
+          "features": ["generate"]
+        }
+      },
+      "expect": { "status": [200, 201] }
+    },
+    {
+      "name": "customer for the read cases",
+      "http": {
+        "method": "POST",
+        "path": "/v1/customers",
+        "body": { "externalId": "cus-{{run}}" }
+      },
+      "expect": { "status": [200, 201] }
+    },
+    {
+      "name": "customer to subscribe",
+      "http": {
+        "method": "POST",
+        "path": "/v1/customers",
+        "body": { "externalId": "sub-{{run}}" }
+      },
+      "expect": { "status": [200, 201] }
+    }
+  ],
+  "steps": [
+    {
+      "name": "class N: arm a lost answer for a customer upsert",
+      "fault": { "match": "POST /v1/customers", "dropResponse": 1 }
+    },
+    {
+      "name": "class N: the upsert is repeated and succeeds (asking twice leaves the same customer)",
+      "op": "customers.upsert",
+      "retries": true,
+      "input": { "id": "new-{{run}}", "name": "Ada" },
+      "expect": { "ok": { "externalId": "new-{{run}}", "name": "Ada" } }
+    },
+    {
+      "name": "class N: arm a lost answer for activating a plan",
+      "fault": { "match": "POST /v1/customers/sub-{{run}}/subscription", "dropResponse": 1 }
+    },
+    {
+      "name": "class N: activating the same plan is repeated and answers with the one subscription",
+      "op": "plans.subscribe",
+      "retries": true,
+      "input": { "customer": "sub-{{run}}", "plan": "starter-{{run}}" },
+      "expect": { "ok": { "status": "active" } }
+    },
+
+    {
+      "name": "class R: arm a lost answer for a balance read",
+      "fault": { "match": "GET /v1/customers/cus-{{run}}/balance", "dropResponse": 1 }
+    },
+    {
+      "name": "class R: the read is repeated and answers",
+      "op": "credits.balance",
+      "retries": true,
+      "input": { "customer": "cus-{{run}}" },
+      "expect": { "ok": { "remaining": 0, "granted": 0 } }
+    },
+    {
+      "name": "class R: arm a lost answer for an entitlement check (a POST, but read-only)",
+      "fault": { "match": "POST /v1/entitlements/check", "dropResponse": 1 }
+    },
+    {
+      "name": "class R: the check is repeated and answers (it still refuses what is not allowed)",
+      "op": "entitlements.check",
+      "retries": true,
+      "input": { "customer": "cus-{{run}}", "feature": "generate" },
+      "expect": { "ok": { "allowed": false } }
+    },
+
+    {
+      "name": "class X: start counting what reaches the API",
+      "http": { "method": "POST", "path": "/__fault/reset" },
+      "expect": { "status": 204 }
+    },
+    {
+      "name": "class X: arm a lost answer for minting a customer token (no key, a new token every time)",
+      "fault": { "match": "POST /v1/customer-tokens", "dropResponse": 1 }
+    },
+    {
+      "name": "class X: even with retries on, the SDK does NOT repeat it: the caller learns the outcome is unknown",
+      "op": "tokens.create",
+      "retries": true,
+      "input": { "customer": "cus-{{run}}" },
+      "expect": { "error": { "class": "Unavailable", "status": 0 } }
+    },
+    {
+      "name": "class X: the API received it exactly once (a silent repeat would have minted a second token)",
+      "http": { "method": "GET", "path": "/__fault/hits?match=POST%20/v1/customer-tokens" },
+      "expect": { "status": 200, "body": { "hits": 1 } }
+    },
+    {
+      "name": "class X: asking again is the caller's decision and works",
+      "op": "tokens.create",
+      "input": { "customer": "cus-{{run}}" },
+      "expect": { "ok": { "token": "$string", "customerId": "$string" } }
+    }
+  ]
+}

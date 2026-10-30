@@ -1,0 +1,89 @@
+{
+  "id": "credits",
+  "title": "Credit grants: applied once per id, validated, visible in the balance",
+  "setup": [
+    {
+      "name": "customer",
+      "http": {
+        "method": "POST",
+        "path": "/v1/customers",
+        "body": { "externalId": "cus-{{run}}" }
+      },
+      "expect": { "status": [200, 201] }
+    }
+  ],
+  "steps": [
+    {
+      "name": "a new customer starts at zero",
+      "op": "credits.balance",
+      "input": { "customer": "cus-{{run}}" },
+      "expect": { "ok": { "remaining": 0, "consumed": 0, "granted": 0 } }
+    },
+    {
+      "name": "grant 50 credits",
+      "op": "credits.grant",
+      "input": { "id": "grant-{{run}}-1", "customer": "cus-{{run}}", "credits": 50 },
+      "expect": { "ok": { "kind": "grant", "credits": 50 } }
+    },
+    {
+      "name": "the same grant again is a replay",
+      "op": "credits.grant",
+      "input": { "id": "grant-{{run}}-1", "customer": "cus-{{run}}", "credits": 50 },
+      "expect": { "ok": { "kind": "grant", "credits": 50 } }
+    },
+    {
+      "name": "the balance counts it once",
+      "op": "credits.balance",
+      "input": { "customer": "cus-{{run}}" },
+      "expect": { "ok": { "remaining": 50, "granted": 50, "consumed": 0 } }
+    },
+    {
+      "name": "the same id with another amount is a conflict",
+      "op": "credits.grant",
+      "input": { "id": "grant-{{run}}-1", "customer": "cus-{{run}}", "credits": 80 },
+      "expect": {
+        "error": { "class": "InvalidRequest", "status": 409, "code": "idempotency_conflict" }
+      }
+    },
+    {
+      "name": "zero credits is invalid",
+      "op": "credits.grant",
+      "input": { "id": "grant-{{run}}-2", "customer": "cus-{{run}}", "credits": 0 },
+      "expect": {
+        "error": { "class": "InvalidRequest", "status": 400, "code": "validation_error" }
+      }
+    },
+    {
+      "name": "negative credits are invalid (credits are never taken back)",
+      "op": "credits.grant",
+      "input": { "id": "grant-{{run}}-3", "customer": "cus-{{run}}", "credits": -5 },
+      "expect": {
+        "error": { "class": "InvalidRequest", "status": 400, "code": "validation_error" }
+      }
+    },
+    {
+      "name": "a grant for an unknown customer is not found",
+      "op": "credits.grant",
+      "input": { "id": "grant-{{run}}-4", "customer": "nobody-{{run}}", "credits": 5 },
+      "expect": { "error": { "class": "InvalidRequest", "status": 404, "code": "not_found" } }
+    },
+    {
+      "name": "the balance of an unknown customer is not found",
+      "op": "credits.balance",
+      "input": { "customer": "nobody-{{run}}" },
+      "expect": { "error": { "class": "InvalidRequest", "status": 404, "code": "not_found" } }
+    },
+    {
+      "name": "a second grant adds up",
+      "op": "credits.grant",
+      "input": { "id": "grant-{{run}}-5", "customer": "cus-{{run}}", "credits": 25 },
+      "expect": { "ok": { "credits": 25 } }
+    },
+    {
+      "name": "the balance is 75",
+      "op": "credits.balance",
+      "input": { "customer": "cus-{{run}}" },
+      "expect": { "ok": { "remaining": 75, "granted": 75 } }
+    }
+  ]
+}

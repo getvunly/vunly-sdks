@@ -1,0 +1,61 @@
+AllCops:
+  TargetRubyVersion: 3.3
+  NewCops: enable
+  SuggestExtensions: false
+  Exclude:
+    - "vendor/**/*"
+    - "examples/**/tmp/**/*"
+    - "doc/**/*"
+
+Layout/LineLength:
+  Max: 125
+
+Style/Documentation:
+  Enabled: false
+
+Style/StringLiterals:
+  EnforcedStyle: double_quotes
+
+# The library keeps to the usual size limits (a little relaxed for the transport). Tests and the conformance runner are
+# long, flat scripts by nature: the size cops do not apply to them.
+Metrics/MethodLength:
+  Max: 25
+  Exclude: &scripts
+    - "test/**/*"
+    - "examples/**/test/**/*"
+    - "**/run_scenarios.rb"
+
+Metrics/AbcSize:
+  Max: 32
+  Exclude: *scripts
+
+Metrics/CyclomaticComplexity:
+  Max: 11
+  Exclude: *scripts
+
+Metrics/PerceivedComplexity:
+  Max: 11
+  Exclude: *scripts
+
+Metrics/ClassLength:
+  Max: 350
+  Exclude: *scripts
+
+Metrics/ParameterLists:
+  CountKeywordArgs: false
+  Exclude: *scripts
+
+Metrics/BlockLength:
+  Exclude:
+    - "test/**/*"
+    - "examples/**/test/**/*"
+    - "*.gemspec"
+
+Naming/VariableNumber:
+  Exclude: *scripts
+
+Naming/MethodParameterName:
+  Exclude: *scripts
+
+Metrics/ModuleLength:
+  Max: 120

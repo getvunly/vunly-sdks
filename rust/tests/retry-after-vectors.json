@@ -1,0 +1,237 @@
+{
+  "_note": "How every SDK reads a Retry-After header (conformance/README.md). `seconds`: honoured as the wait when it is at most 30; `surface`: a number above the 30 s cap, or too large to represent: raise Unavailable at once with retryAfterSeconds set (capped at 86400), NEVER retry early; `ignored`: not a plain decimal number of seconds (an HTTP date, garbage, a hex or suffixed form): treated as no header, the normal backoff applies. Syntax of a number: an optional +, digits, an optional fraction (.5 and 5. are both decimals: 0.5 s and 5 s; a lone . is not), an optional exponent (e or E, optional sign), nothing else; or Inf / Infinity in any case (an infinite wait is the longest one). Every SDK runs these in its own tests.",
+  "capSeconds": 30,
+  "reportCapSeconds": 86400,
+  "vectors": [
+    {
+      "header": "0",
+      "kind": "seconds",
+      "seconds": 0
+    },
+    {
+      "header": "1",
+      "kind": "seconds",
+      "seconds": 1
+    },
+    {
+      "header": "5",
+      "kind": "seconds",
+      "seconds": 5
+    },
+    {
+      "header": " 5 ",
+      "kind": "seconds",
+      "seconds": 5
+    },
+    {
+      "header": "1.5",
+      "kind": "seconds",
+      "seconds": 1.5
+    },
+    {
+      "header": ".5",
+      "kind": "seconds",
+      "seconds": 0.5
+    },
+    {
+      "header": "5.",
+      "kind": "seconds",
+      "seconds": 5
+    },
+    {
+      "header": "+.5",
+      "kind": "seconds",
+      "seconds": 0.5
+    },
+    {
+      "header": "5.e0",
+      "kind": "seconds",
+      "seconds": 5
+    },
+    {
+      "header": ".05e1",
+      "kind": "seconds",
+      "seconds": 0.5
+    },
+    {
+      "header": "30",
+      "kind": "seconds",
+      "seconds": 30
+    },
+    {
+      "header": "30.0",
+      "kind": "seconds",
+      "seconds": 30
+    },
+    {
+      "header": "3e0",
+      "kind": "seconds",
+      "seconds": 3
+    },
+    {
+      "header": "31",
+      "kind": "surface",
+      "seconds": 31
+    },
+    {
+      "header": "120",
+      "kind": "surface",
+      "seconds": 120
+    },
+    {
+      "header": "3600",
+      "kind": "surface",
+      "seconds": 3600
+    },
+    {
+      "header": "86400",
+      "kind": "surface",
+      "seconds": 86400
+    },
+    {
+      "header": "86401",
+      "kind": "surface",
+      "seconds": 86400
+    },
+    {
+      "header": "999999999",
+      "kind": "surface",
+      "seconds": 86400
+    },
+    {
+      "header": "9999999999",
+      "kind": "surface",
+      "seconds": 86400
+    },
+    {
+      "header": "99999999999",
+      "kind": "surface",
+      "seconds": 86400
+    },
+    {
+      "header": "9999999999.5",
+      "kind": "surface",
+      "seconds": 86400
+    },
+    {
+      "header": "1e12",
+      "kind": "surface",
+      "seconds": 86400
+    },
+    {
+      "header": "1E12",
+      "kind": "surface",
+      "seconds": 86400
+    },
+    {
+      "header": "1e999",
+      "kind": "surface",
+      "seconds": 86400
+    },
+    {
+      "header": "1e+999",
+      "kind": "surface",
+      "seconds": 86400
+    },
+    {
+      "header": "1e99999999999999999999",
+      "kind": "surface",
+      "seconds": 86400
+    },
+    {
+      "header": "9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999",
+      "kind": "surface",
+      "seconds": 86400
+    },
+    {
+      "header": "9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999.5",
+      "kind": "surface",
+      "seconds": 86400
+    },
+    {
+      "header": "",
+      "kind": "ignored"
+    },
+    {
+      "header": "abc",
+      "kind": "ignored"
+    },
+    {
+      "header": "Wed, 21 Oct 2026 07:28:00 GMT",
+      "kind": "ignored"
+    },
+    {
+      "header": "0x1p3",
+      "kind": "ignored"
+    },
+    {
+      "header": "1d",
+      "kind": "ignored"
+    },
+    {
+      "header": "5s",
+      "kind": "ignored"
+    },
+    {
+      "header": "-3",
+      "kind": "ignored"
+    },
+    {
+      "header": "NaN",
+      "kind": "ignored"
+    },
+    {
+      "header": "1,5",
+      "kind": "ignored"
+    },
+    {
+      "header": "1 5",
+      "kind": "ignored"
+    },
+    {
+      "header": ".",
+      "kind": "ignored"
+    },
+    {
+      "header": "e5",
+      "kind": "ignored"
+    },
+    {
+      "header": "١٢",
+      "kind": "ignored"
+    },
+    {
+      "header": "+3",
+      "kind": "seconds",
+      "seconds": 3
+    },
+    {
+      "header": "Infinity",
+      "kind": "surface",
+      "seconds": 86400
+    },
+    {
+      "header": "inf",
+      "kind": "surface",
+      "seconds": 86400
+    },
+    {
+      "header": "+Inf",
+      "kind": "surface",
+      "seconds": 86400
+    },
+    {
+      "header": "INF",
+      "kind": "surface",
+      "seconds": 86400
+    },
+    {
+      "header": "-Inf",
+      "kind": "ignored"
+    },
+    {
+      "header": "infinit",
+      "kind": "ignored"
+    }
+  ]
+}

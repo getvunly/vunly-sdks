@@ -1,0 +1,10 @@
+Vunly client for PHP and Laravel (vunly/vunly)
+Copyright 2026 Vunly
+
+This product includes software developed at Vunly.
+
+Licensed under the Apache License, Version 2.0 (see LICENSE). It has no third-party runtime dependencies: it needs only PHP
+with the cURL and JSON extensions. The Laravel integration uses Laravel only when your application loads it.
+
+The Vunly name, logo and wordmark are trademarks of Vunly. The Apache License does not grant permission to use
+them (section 6 of the License); using the software does not require them.

@@ -1,0 +1,6 @@
+# The source distribution carries the package, its metadata and its legal files; the repository's tests stay in the
+# repository (they use synthetic keys and a fake transport, and are run from there with pytest).
+include LICENSE NOTICE README.md CHANGELOG.md pyproject.toml
+recursive-include src/vunly *.py py.typed
+prune tests
+global-exclude __pycache__ *.py[cod] *.egg-info

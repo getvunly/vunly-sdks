@@ -1,0 +1,195 @@
+{
+  "description": "Shared webhook verification vectors. Signatures are HMAC-SHA256 over \"<t>.\" + payload (UTF-8), computed outside any SDK with Node's crypto module. Every secret is synthetic. \"expect\" is \"ok\", a WebhookError reason, or \"config\" (a configuration error raised before the signature is looked at). \"now\" is seconds since the epoch.",
+  "now": 1798761600,
+  "vectors": [
+    {
+      "name": "valid delivery",
+      "payload": "{\"id\":\"evt_1\",\"type\":\"credits.low\",\"createdAt\":\"2026-10-28T10:00:00.000Z\",\"data\":{\"n\":1}}",
+      "header": "t=1798761600,v1=78a0cc8145c020b29af81fb85f403686bfb934d2e9727acf3dea6665e6b4f60f",
+      "secrets": ["whsec_synthetic_vector"],
+      "expect": "ok"
+    },
+    {
+      "name": "multi-byte body signed as UTF-8",
+      "payload": "{\"id\":\"evt_2\",\"type\":\"credits.low\",\"data\":{\"name\":\"café ✓\"}}",
+      "header": "t=1798761600,v1=1697b5dc3e4c5eee4c52aca53adefa009b73f73f148581fc15d910cffbf89a13",
+      "secrets": ["whsec_synthetic_vector"],
+      "expect": "ok"
+    },
+    {
+      "name": "rotation: the old secret still matches",
+      "payload": "{\"id\":\"evt_1\",\"type\":\"credits.low\",\"createdAt\":\"2026-10-28T10:00:00.000Z\",\"data\":{\"n\":1}}",
+      "header": "t=1798761600,v1=b07d981e1c925d549f7580f73409d98cd898e48273d083aaa41b29a9c1e74494",
+      "secrets": ["whsec_synthetic_vector", "whsec_synthetic_old"],
+      "expect": "ok"
+    },
+    {
+      "name": "two v1 values, the second is good",
+      "payload": "{\"id\":\"evt_1\",\"type\":\"credits.low\",\"createdAt\":\"2026-10-28T10:00:00.000Z\",\"data\":{\"n\":1}}",
+      "header": "t=1798761600,v1=0000000000000000000000000000000000000000000000000000000000000000,v1=78a0cc8145c020b29af81fb85f403686bfb934d2e9727acf3dea6665e6b4f60f",
+      "secrets": ["whsec_synthetic_vector"],
+      "expect": "ok"
+    },
+    {
+      "name": "300 seconds in the past is accepted",
+      "payload": "{\"id\":\"evt_1\",\"type\":\"credits.low\",\"createdAt\":\"2026-10-28T10:00:00.000Z\",\"data\":{\"n\":1}}",
+      "header": "t=1798761300,v1=3637aac24b6d50f98d1f4777ba6b4b99159b6b6543dcf2fbd734e0d4b3c4b337",
+      "secrets": ["whsec_synthetic_vector"],
+      "expect": "ok"
+    },
+    {
+      "name": "300 seconds in the future is accepted",
+      "payload": "{\"id\":\"evt_1\",\"type\":\"credits.low\",\"createdAt\":\"2026-10-28T10:00:00.000Z\",\"data\":{\"n\":1}}",
+      "header": "t=1798761900,v1=b5ddf3d142980d516bff67c15e3dd6be2748b7ee717fc3dd207dda4c8309e160",
+      "secrets": ["whsec_synthetic_vector"],
+      "expect": "ok"
+    },
+    {
+      "name": "301 seconds in the past is stale",
+      "payload": "{\"id\":\"evt_1\",\"type\":\"credits.low\",\"createdAt\":\"2026-10-28T10:00:00.000Z\",\"data\":{\"n\":1}}",
+      "header": "t=1798761299,v1=b372a588cdb27f4e834373b89dfeb72b5afcec8f1bc672120d4dabc6f0f4c389",
+      "secrets": ["whsec_synthetic_vector"],
+      "expect": "stale_timestamp"
+    },
+    {
+      "name": "301 seconds in the future is stale",
+      "payload": "{\"id\":\"evt_1\",\"type\":\"credits.low\",\"createdAt\":\"2026-10-28T10:00:00.000Z\",\"data\":{\"n\":1}}",
+      "header": "t=1798761901,v1=24030185e3a44c79ab269c4d4d99a1d56a0ded24540f83dc05fb94bd448e53f9",
+      "secrets": ["whsec_synthetic_vector"],
+      "expect": "stale_timestamp"
+    },
+    {
+      "name": "a tampered body",
+      "payload": "{\"id\":\"evt_1\",\"type\":\"credits.low\",\"createdAt\":\"2026-10-28T10:00:00.000Z\",\"data\":{\"n\":2}}",
+      "header": "t=1798761600,v1=78a0cc8145c020b29af81fb85f403686bfb934d2e9727acf3dea6665e6b4f60f",
+      "secrets": ["whsec_synthetic_vector"],
+      "expect": "no_matching_signature"
+    },
+    {
+      "name": "a different timestamp than the one signed",
+      "payload": "{\"id\":\"evt_1\",\"type\":\"credits.low\",\"createdAt\":\"2026-10-28T10:00:00.000Z\",\"data\":{\"n\":1}}",
+      "header": "t=1798761601,v1=78a0cc8145c020b29af81fb85f403686bfb934d2e9727acf3dea6665e6b4f60f",
+      "secrets": ["whsec_synthetic_vector"],
+      "expect": "no_matching_signature"
+    },
+    {
+      "name": "the wrong secret",
+      "payload": "{\"id\":\"evt_1\",\"type\":\"credits.low\",\"createdAt\":\"2026-10-28T10:00:00.000Z\",\"data\":{\"n\":1}}",
+      "header": "t=1798761600,v1=78a0cc8145c020b29af81fb85f403686bfb934d2e9727acf3dea6665e6b4f60f",
+      "secrets": ["whsec_synthetic_other"],
+      "expect": "no_matching_signature"
+    },
+    {
+      "name": "a good signature over a payload that is not an event",
+      "payload": "{\"nope\":true}",
+      "header": "t=1798761600,v1=37ea06f9889ea6b6c05aec7997e75ec99139df8024299ca41a740eb88d953d36",
+      "secrets": ["whsec_synthetic_vector"],
+      "expect": "invalid_payload"
+    },
+    {
+      "name": "empty header",
+      "payload": "{}",
+      "header": "",
+      "secrets": ["whsec_synthetic_vector"],
+      "expect": "missing_header"
+    },
+    {
+      "name": "blank header",
+      "payload": "{}",
+      "header": "   ",
+      "secrets": ["whsec_synthetic_vector"],
+      "expect": "missing_header"
+    },
+    {
+      "name": "no header at all",
+      "payload": "{}",
+      "header": null,
+      "secrets": ["whsec_synthetic_vector"],
+      "expect": "missing_header"
+    },
+    {
+      "name": "garbage header",
+      "payload": "{}",
+      "header": "garbage",
+      "secrets": ["whsec_synthetic_vector"],
+      "expect": "malformed_header"
+    },
+    {
+      "name": "timestamp is not a number",
+      "payload": "{}",
+      "header": "t=abc,v1=78a0cc8145c020b29af81fb85f403686bfb934d2e9727acf3dea6665e6b4f60f",
+      "secrets": ["whsec_synthetic_vector"],
+      "expect": "malformed_header"
+    },
+    {
+      "name": "no v1 value",
+      "payload": "{}",
+      "header": "t=1798761600",
+      "secrets": ["whsec_synthetic_vector"],
+      "expect": "malformed_header"
+    },
+    {
+      "name": "v1 is not 64 hex characters",
+      "payload": "{}",
+      "header": "t=1798761600,v1=00",
+      "secrets": ["whsec_synthetic_vector"],
+      "expect": "malformed_header"
+    },
+    {
+      "name": "no secrets (empty list)",
+      "payload": "{}",
+      "header": "t=1798761600,v1=78a0cc8145c020b29af81fb85f403686bfb934d2e9727acf3dea6665e6b4f60f",
+      "secrets": [],
+      "expect": "config"
+    },
+    {
+      "name": "empty secret",
+      "payload": "{}",
+      "header": "garbage",
+      "secrets": [""],
+      "expect": "config"
+    },
+    {
+      "name": "blank secret",
+      "payload": "{}",
+      "header": "t=1798761600,v1=78a0cc8145c020b29af81fb85f403686bfb934d2e9727acf3dea6665e6b4f60f",
+      "secrets": ["   "],
+      "expect": "config"
+    },
+    {
+      "name": "a blank secret next to a good one",
+      "payload": "{\"id\":\"evt_1\",\"type\":\"credits.low\",\"createdAt\":\"2026-10-28T10:00:00.000Z\",\"data\":{\"n\":1}}",
+      "header": "t=1798761600,v1=78a0cc8145c020b29af81fb85f403686bfb934d2e9727acf3dea6665e6b4f60f",
+      "secrets": ["whsec_synthetic_vector", ""],
+      "expect": "config"
+    },
+    {
+      "name": "a secret with no printable ASCII (non-breaking space)",
+      "payload": "{}",
+      "header": "garbage",
+      "secrets": [" 　"],
+      "expect": "config"
+    },
+    {
+      "name": "a secret of control characters",
+      "payload": "{}",
+      "header": "garbage",
+      "secrets": ["\u0000\u0001\t"],
+      "expect": "config"
+    },
+    {
+      "name": "v1 in uppercase hex is not a signature",
+      "payload": "{\"id\":\"evt_1\",\"type\":\"credits.low\",\"createdAt\":\"2026-10-28T10:00:00.000Z\",\"data\":{\"n\":1}}",
+      "header": "t=1798761600,v1=78A0CC8145C020B29AF81FB85F403686BFB934D2E9727ACF3DEA6665E6B4F60F",
+      "secrets": ["whsec_synthetic_vector"],
+      "expect": "malformed_header"
+    },
+    {
+      "name": "an uppercase v1 next to a good lowercase one is ignored",
+      "payload": "{\"id\":\"evt_1\",\"type\":\"credits.low\",\"createdAt\":\"2026-10-28T10:00:00.000Z\",\"data\":{\"n\":1}}",
+      "header": "t=1798761600,v1=78A0CC8145C020B29AF81FB85F403686BFB934D2E9727ACF3DEA6665E6B4F60F,v1=78a0cc8145c020b29af81fb85f403686bfb934d2e9727acf3dea6665e6b4f60f",
+      "secrets": ["whsec_synthetic_vector"],
+      "expect": "ok"
+    }
+  ]
+}

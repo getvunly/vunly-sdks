@@ -1,0 +1,13 @@
+# frozen_string_literal: true
+
+source "https://rubygems.org"
+
+# vunly is not published to a registry. This example is built against the INSTALLED gem: build it with
+# `gem build vunly.gemspec` in the ruby directory and `gem install --local vunly-0.1.0.gem`; Bundler then finds it among
+# the installed gems.
+gem "vunly", "0.1.0"
+
+# Only what the application loads (action_controller/railtie): no ORM, no assets, no mailer.
+gem "actionpack", ">= 8.0", "< 9"
+gem "puma", ">= 6"
+gem "railties", ">= 8.0", "< 9"

@@ -1,0 +1,258 @@
+{
+  "id": "concurrency",
+  "title": "Twenty concurrent requests on a balance of five: exactly five succeed, the balance is never negative",
+  "setup": [
+    {
+      "name": "meter",
+      "http": {
+        "method": "POST",
+        "path": "/v1/meters",
+        "body": { "key": "tokens", "unitsPerCredit": 1000 }
+      },
+      "expect": { "status": [200, 201] }
+    },
+    {
+      "name": "customer",
+      "http": {
+        "method": "POST",
+        "path": "/v1/customers",
+        "body": { "externalId": "cus-{{run}}" }
+      },
+      "expect": { "status": [200, 201] }
+    },
+    {
+      "name": "five credits",
+      "http": {
+        "method": "POST",
+        "path": "/v1/customers/cus-{{run}}/credit-grants",
+        "headers": { "idempotency-key": "fund-{{run}}-0001" },
+        "body": { "credits": 5 }
+      },
+      "expect": { "status": [200, 201] }
+    }
+  ],
+  "steps": [
+    {
+      "name": "20 different ids at once, one credit each",
+      "parallel": [
+        {
+          "op": "usage.record",
+          "timeoutMs": 60000,
+          "input": {
+            "id": "c-{{run}}-01",
+            "customer": "cus-{{run}}",
+            "meter": "tokens",
+            "quantity": 1000
+          }
+        },
+        {
+          "op": "usage.record",
+          "timeoutMs": 60000,
+          "input": {
+            "id": "c-{{run}}-02",
+            "customer": "cus-{{run}}",
+            "meter": "tokens",
+            "quantity": 1000
+          }
+        },
+        {
+          "op": "usage.record",
+          "timeoutMs": 60000,
+          "input": {
+            "id": "c-{{run}}-03",
+            "customer": "cus-{{run}}",
+            "meter": "tokens",
+            "quantity": 1000
+          }
+        },
+        {
+          "op": "usage.record",
+          "timeoutMs": 60000,
+          "input": {
+            "id": "c-{{run}}-04",
+            "customer": "cus-{{run}}",
+            "meter": "tokens",
+            "quantity": 1000
+          }
+        },
+        {
+          "op": "usage.record",
+          "timeoutMs": 60000,
+          "input": {
+            "id": "c-{{run}}-05",
+            "customer": "cus-{{run}}",
+            "meter": "tokens",
+            "quantity": 1000
+          }
+        },
+        {
+          "op": "usage.record",
+          "timeoutMs": 60000,
+          "input": {
+            "id": "c-{{run}}-06",
+            "customer": "cus-{{run}}",
+            "meter": "tokens",
+            "quantity": 1000
+          }
+        },
+        {
+          "op": "usage.record",
+          "timeoutMs": 60000,
+          "input": {
+            "id": "c-{{run}}-07",
+            "customer": "cus-{{run}}",
+            "meter": "tokens",
+            "quantity": 1000
+          }
+        },
+        {
+          "op": "usage.record",
+          "timeoutMs": 60000,
+          "input": {
+            "id": "c-{{run}}-08",
+            "customer": "cus-{{run}}",
+            "meter": "tokens",
+            "quantity": 1000
+          }
+        },
+        {
+          "op": "usage.record",
+          "timeoutMs": 60000,
+          "input": {
+            "id": "c-{{run}}-09",
+            "customer": "cus-{{run}}",
+            "meter": "tokens",
+            "quantity": 1000
+          }
+        },
+        {
+          "op": "usage.record",
+          "timeoutMs": 60000,
+          "input": {
+            "id": "c-{{run}}-10",
+            "customer": "cus-{{run}}",
+            "meter": "tokens",
+            "quantity": 1000
+          }
+        },
+        {
+          "op": "usage.record",
+          "timeoutMs": 60000,
+          "input": {
+            "id": "c-{{run}}-11",
+            "customer": "cus-{{run}}",
+            "meter": "tokens",
+            "quantity": 1000
+          }
+        },
+        {
+          "op": "usage.record",
+          "timeoutMs": 60000,
+          "input": {
+            "id": "c-{{run}}-12",
+            "customer": "cus-{{run}}",
+            "meter": "tokens",
+            "quantity": 1000
+          }
+        },
+        {
+          "op": "usage.record",
+          "timeoutMs": 60000,
+          "input": {
+            "id": "c-{{run}}-13",
+            "customer": "cus-{{run}}",
+            "meter": "tokens",
+            "quantity": 1000
+          }
+        },
+        {
+          "op": "usage.record",
+          "timeoutMs": 60000,
+          "input": {
+            "id": "c-{{run}}-14",
+            "customer": "cus-{{run}}",
+            "meter": "tokens",
+            "quantity": 1000
+          }
+        },
+        {
+          "op": "usage.record",
+          "timeoutMs": 60000,
+          "input": {
+            "id": "c-{{run}}-15",
+            "customer": "cus-{{run}}",
+            "meter": "tokens",
+            "quantity": 1000
+          }
+        },
+        {
+          "op": "usage.record",
+          "timeoutMs": 60000,
+          "input": {
+            "id": "c-{{run}}-16",
+            "customer": "cus-{{run}}",
+            "meter": "tokens",
+            "quantity": 1000
+          }
+        },
+        {
+          "op": "usage.record",
+          "timeoutMs": 60000,
+          "input": {
+            "id": "c-{{run}}-17",
+            "customer": "cus-{{run}}",
+            "meter": "tokens",
+            "quantity": 1000
+          }
+        },
+        {
+          "op": "usage.record",
+          "timeoutMs": 60000,
+          "input": {
+            "id": "c-{{run}}-18",
+            "customer": "cus-{{run}}",
+            "meter": "tokens",
+            "quantity": 1000
+          }
+        },
+        {
+          "op": "usage.record",
+          "timeoutMs": 60000,
+          "input": {
+            "id": "c-{{run}}-19",
+            "customer": "cus-{{run}}",
+            "meter": "tokens",
+            "quantity": 1000
+          }
+        },
+        {
+          "op": "usage.record",
+          "timeoutMs": 60000,
+          "input": {
+            "id": "c-{{run}}-20",
+            "customer": "cus-{{run}}",
+            "meter": "tokens",
+            "quantity": 1000
+          }
+        }
+      ],
+      "counts": { "ok": 5, "error": 15 },
+      "errorExpect": { "class": "LimitReached", "status": 402, "code": "insufficient_credits" }
+    },
+    {
+      "name": "exactly five credits spent, none left, never negative",
+      "op": "credits.balance",
+      "input": { "customer": "cus-{{run}}" },
+      "expect": { "ok": { "remaining": 0, "consumed": 5, "granted": 5 } }
+    },
+    {
+      "name": "exactly five debit rows besides the grant",
+      "as": "admin",
+      "http": { "method": "GET", "path": "/v1/customers/cus-{{run}}/ledger" },
+      "expect": {
+        "status": 200,
+        "body": { "data": ["$any", "$any", "$any", "$any", "$any", "$any"] }
+      }
+    }
+  ]
+}

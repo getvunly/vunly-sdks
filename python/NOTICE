@@ -1,0 +1,10 @@
+Vunly client for Python (vunly)
+Copyright 2026 Vunly
+
+This product includes software developed at Vunly.
+
+Licensed under the Apache License, Version 2.0 (see LICENSE). It depends on httpx (BSD-3-Clause), which is
+installed separately and is not bundled in the wheel or the source distribution.
+
+The Vunly name, logo and wordmark are trademarks of Vunly. The Apache License does not grant permission to use
+them (section 6 of the License); using the software does not require them.

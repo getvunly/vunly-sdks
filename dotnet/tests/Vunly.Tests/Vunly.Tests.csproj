@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Run on the .NET 8 SDK with -p:TargetFrameworks=net8.0 and on the .NET 10 SDK with -p:TargetFrameworks=net10.0: each
+         container has only its own runtime. -->
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- a copy of conformance/retry-after-vectors.json (the shared Retry-After rule); a repository check keeps the copies identical -->
+    <Content Include="..\retry-after-vectors.json" Link="retry-after-vectors.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- a copy of the shared webhook vectors (webhook-vectors.json); a repository check keeps the copies identical -->
+    <Content Include="..\webhook-vectors.json" Link="webhook-vectors.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Vunly\Vunly.csproj" />
+    <ProjectReference Include="..\..\src\Vunly.Extensions.DependencyInjection\Vunly.Extensions.DependencyInjection.csproj" />
+  </ItemGroup>
+
+</Project>

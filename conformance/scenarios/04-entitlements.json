@@ -1,0 +1,133 @@
+{
+  "id": "entitlements",
+  "title": "Entitlement check: a typed, advisory decision before billable work; the debit stays the authority",
+  "setup": [
+    {
+      "name": "meter",
+      "http": {
+        "method": "POST",
+        "path": "/v1/meters",
+        "body": { "key": "tokens", "unitsPerCredit": 1000 }
+      },
+      "expect": { "status": [200, 201] }
+    },
+    {
+      "name": "plan",
+      "http": {
+        "method": "POST",
+        "path": "/v1/plans",
+        "body": {
+          "key": "starter-{{run}}",
+          "name": "Starter",
+          "includedCredits": 10,
+          "meter": "tokens",
+          "features": ["generate"]
+        }
+      },
+      "expect": { "status": [200, 201] }
+    },
+    {
+      "name": "customer with a plan",
+      "http": {
+        "method": "POST",
+        "path": "/v1/customers",
+        "body": { "externalId": "cus-{{run}}" }
+      },
+      "expect": { "status": [200, 201] }
+    },
+    {
+      "name": "customer without a plan",
+      "http": {
+        "method": "POST",
+        "path": "/v1/customers",
+        "body": { "externalId": "bare-{{run}}" }
+      },
+      "expect": { "status": [200, 201] }
+    },
+    {
+      "name": "subscribe",
+      "http": {
+        "method": "POST",
+        "path": "/v1/customers/cus-{{run}}/subscription",
+        "body": { "plan": "starter-{{run}}" }
+      },
+      "expect": { "status": [200, 201] }
+    }
+  ],
+  "steps": [
+    {
+      "name": "allowed: feature in the plan, credits cover the estimate",
+      "op": "entitlements.check",
+      "input": {
+        "customer": "cus-{{run}}",
+        "feature": "generate",
+        "estimate": { "meter": "tokens", "quantity": 1500 }
+      },
+      "expect": { "ok": { "allowed": true, "reason": "ok", "remaining": 10, "required": 2 } }
+    },
+    {
+      "name": "a check does not spend anything",
+      "op": "credits.balance",
+      "input": { "customer": "cus-{{run}}" },
+      "expect": { "ok": { "remaining": 10, "consumed": 0 } }
+    },
+    {
+      "name": "feature not in the plan",
+      "op": "entitlements.check",
+      "input": { "customer": "cus-{{run}}", "feature": "export-pdf" },
+      "expect": { "ok": { "allowed": false, "reason": "feature_not_in_plan" } }
+    },
+    {
+      "name": "no active plan",
+      "op": "entitlements.check",
+      "input": { "customer": "bare-{{run}}", "feature": "generate" },
+      "expect": { "ok": { "allowed": false, "reason": "no_active_plan" } }
+    },
+    {
+      "name": "not enough credits for the estimate",
+      "op": "entitlements.check",
+      "input": {
+        "customer": "cus-{{run}}",
+        "feature": "generate",
+        "estimate": { "meter": "tokens", "quantity": 50000 }
+      },
+      "expect": {
+        "ok": {
+          "allowed": false,
+          "reason": "insufficient_credits",
+          "remaining": 10,
+          "required": 50
+        }
+      }
+    },
+    {
+      "name": "an unknown meter in the estimate is an error, never an 'allowed'",
+      "op": "entitlements.check",
+      "input": {
+        "customer": "cus-{{run}}",
+        "feature": "generate",
+        "estimate": { "meter": "no-such-meter", "quantity": 5 }
+      },
+      "expect": { "error": { "class": "InvalidRequest", "status": 404, "code": "meter_not_found" } }
+    },
+    {
+      "name": "an unknown customer is not found",
+      "op": "entitlements.check",
+      "input": { "customer": "nobody-{{run}}", "feature": "generate" },
+      "expect": { "error": { "class": "InvalidRequest", "status": 404, "code": "not_found" } }
+    },
+    {
+      "name": "the debit is the authority: usage over the balance is still refused",
+      "op": "usage.record",
+      "input": {
+        "id": "ent-{{run}}-1",
+        "customer": "cus-{{run}}",
+        "meter": "tokens",
+        "quantity": 50000
+      },
+      "expect": {
+        "error": { "class": "LimitReached", "status": 402, "code": "insufficient_credits" }
+      }
+    }
+  ]
+}

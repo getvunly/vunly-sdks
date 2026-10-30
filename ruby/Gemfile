@@ -1,0 +1,13 @@
+# frozen_string_literal: true
+
+source "https://rubygems.org"
+
+# The gem has no runtime dependency. The tests use the minitest that ships with Ruby (5.x on Ruby 3.3, 6.x on Ruby 4.0).
+gemspec
+
+group :development do
+  gem "irb", require: false # YARD's legacy parser asks for it on Ruby 4.0 (it is no longer a default gem)
+  gem "rake"
+  gem "rubocop", require: false
+  gem "yard", require: false
+end

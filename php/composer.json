@@ -1,0 +1,85 @@
+{
+  "name": "vunly/vunly",
+  "description": "PHP client for the Vunly API (sandbox): record usage, check entitlements, grant credits. Includes a Laravel service provider, facade and middleware.",
+  "type": "library",
+  "keywords": [
+    "vunly",
+    "usage",
+    "metering",
+    "credits",
+    "entitlements",
+    "laravel",
+    "sdk"
+  ],
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/getvunly/vunly-sdks",
+  "authors": [
+    {
+      "name": "Vunly"
+    }
+  ],
+  "support": {
+    "source": "https://github.com/getvunly/vunly-sdks/tree/main/php"
+  },
+  "require": {
+    "php": "^8.2",
+    "ext-curl": "*",
+    "ext-json": "*"
+  },
+  "require-dev": {
+    "illuminate/http": "^12.0 || ^13.0",
+    "illuminate/routing": "^12.0 || ^13.0",
+    "illuminate/support": "^12.0 || ^13.0",
+    "orchestra/testbench": "^10.0 || ^11.0",
+    "phpstan/phpstan": "^2.1",
+    "phpunit/phpunit": "^11.5 || ^12.0 || ^13.0"
+  },
+  "suggest": {
+    "laravel/framework": "Needed only for the Laravel integration in Vunly\\Laravel (service provider, facade, middleware); version 12 or newer."
+  },
+  "autoload": {
+    "psr-4": {
+      "Vunly\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "Vunly\\Tests\\": "tests/"
+    }
+  },
+  "extra": {
+    "laravel": {
+      "providers": [
+        "Vunly\\Laravel\\VunlyServiceProvider"
+      ],
+      "aliases": {
+        "Vunly": "Vunly\\Laravel\\Facades\\Vunly"
+      }
+    }
+  },
+  "config": {
+    "sort-packages": true,
+    "preferred-install": "dist",
+    "optimize-autoloader": true
+  },
+  "archive": {
+    "name": "vunly-php",
+    "exclude": [
+      "/tests",
+      "/examples",
+      "/build",
+      "/vendor",
+      "/composer.lock",
+      "/phpunit.xml.dist",
+      "/phpstan.neon.dist",
+      "/.gitattributes",
+      "/.phpunit.cache"
+    ]
+  },
+  "scripts": {
+    "test": "phpunit",
+    "analyse": "phpstan analyse --no-progress"
+  },
+  "minimum-stability": "stable",
+  "prefer-stable": true
+}

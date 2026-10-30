@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Example</RootNamespace>
+    <AssemblyName>VunlyAspNetCoreExample</AssemblyName>
+  </PropertyGroup>
+
+  <!-- The example consumes the SDK like an application does: as packages, from the package source in nuget.config. -->
+  <ItemGroup>
+    <PackageReference Include="Vunly" Version="0.1.0" />
+    <PackageReference Include="Vunly.Extensions.DependencyInjection" Version="0.1.0" />
+  </ItemGroup>
+
+</Project>

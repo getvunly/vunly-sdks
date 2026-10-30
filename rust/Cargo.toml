@@ -1,0 +1,35 @@
+[package]
+# This crate is not published to a package registry: use it as a path dependency on this repository.
+name = "vunly"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Rust client for the Vunly sandbox API: record usage, check entitlements, grant credits (blocking, no async runtime)."
+license = "Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/getvunly/vunly-sdks"
+homepage = "https://github.com/getvunly/vunly-sdks"
+keywords = ["vunly", "billing", "usage", "credits", "sdk"]
+categories = ["api-bindings", "web-programming::http-client"]
+include = ["/src/**", "/tests/**", "/Cargo.toml", "/README.md", "/CHANGELOG.md", "/LICENSE", "/NOTICE"]
+resolver = "3"
+
+[dependencies]
+# JSON values (no derive macros, so no proc-macro crates). Also exposed in the public API (error details, webhook data).
+serde_json = { version = "1", default-features = false, features = ["std"] }
+# The HTTP client: blocking, HTTP/1.1, no async runtime. HTTPS through rustls with the ring provider; no gzip, no cookies,
+# no JSON feature, no platform verifier.
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+# HMAC-SHA256 for webhook verification (constant-time verify). Already in the tree through rustls, so it adds no crate.
+ring = { version = "0.17", default-features = false }
+
+[dev-dependencies]
+# a capturing logger for tests/logging.rs (already in the tree through ureq; test-only)
+log = "0.4"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

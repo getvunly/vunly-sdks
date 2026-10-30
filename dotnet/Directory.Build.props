@@ -1,0 +1,16 @@
+<Project>
+  <!-- Settings shared by the library, its tests, the example and the conformance runner. Package metadata lives in each
+       library's own project file. -->
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- NU1900: the vulnerability audit could not reach the package source. That is "not checked", not a reason to
+         fail a compile. -->
+    <WarningsNotAsErrors>NU1900</WarningsNotAsErrors>
+    <!-- Same bytes from any directory and any machine: no timestamps, no absolute paths in the output. -->
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+</Project>

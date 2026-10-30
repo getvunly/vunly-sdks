@@ -1,0 +1,8 @@
+parameters:
+    level: 9
+    paths:
+        - src
+    excludePaths:
+        # a published config file: env() returns mixed by design
+        - src/Laravel/config
+    treatPhpDocTypesAsCertain: false

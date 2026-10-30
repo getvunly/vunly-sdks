@@ -1,0 +1,47 @@
+{
+  "id": "errors",
+  "title": "Every error has the same shape: code, message, requestId (also the Request-Id header); no secret in a message",
+  "setup": [],
+  "steps": [
+    {
+      "name": "a not-found error has the documented shape",
+      "as": "app",
+      "http": { "method": "GET", "path": "/v1/customers/nobody-{{run}}/balance" },
+      "expect": {
+        "status": 404,
+        "body": { "error": { "code": "not_found", "message": "$string", "requestId": "$string" } }
+      },
+      "capture": { "rid": "error.requestId" }
+    },
+    {
+      "name": "an unknown route is the same shape",
+      "as": "app",
+      "http": { "method": "GET", "path": "/v1/no-such-route" },
+      "expect": {
+        "status": 404,
+        "body": { "error": { "code": "not_found", "message": "$string", "requestId": "$string" } }
+      }
+    },
+    {
+      "name": "a malformed body is a validation_error that names the field",
+      "as": "app",
+      "http": { "method": "POST", "path": "/v1/customers", "body": { "externalId": 12 } },
+      "expect": {
+        "status": 400,
+        "body": { "error": { "code": "validation_error", "details": { "fields": "$any" } } }
+      }
+    },
+    {
+      "name": "every response carries a Request-Id header",
+      "as": "app",
+      "http": { "method": "GET", "path": "/v1/customers/nobody-{{run}}/balance" },
+      "expect": { "status": 404, "headers": { "request-id": "$string" } }
+    },
+    {
+      "name": "the key is not echoed in an error",
+      "as": "bogus",
+      "http": { "method": "GET", "path": "/v1/customers" },
+      "expect": { "status": 401, "body": { "error": { "code": "unauthenticated" } } }
+    }
+  ]
+}

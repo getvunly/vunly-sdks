@@ -1,0 +1,7 @@
+--no-private
+--hide-api private
+--readme README.md
+--output-dir doc
+lib/**/*.rb
+-
+CHANGELOG.md

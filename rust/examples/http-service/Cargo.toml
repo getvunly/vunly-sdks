@@ -1,0 +1,17 @@
+[package]
+name = "vunly-http-service-example"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+publish = false
+description = "A small HTTP service that checks a Vunly entitlement, does the work and records usage once."
+license = "Apache-2.0"
+
+# Not part of any workspace: it is built against the SDK in ../.. like a customer's service would be.
+[workspace]
+resolver = "3"
+
+[dependencies]
+vunly = { path = "../.." }
+# A small blocking HTTP server (about five crates). The SDK itself needs no server.
+tiny_http = "0.12"

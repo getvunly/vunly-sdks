@@ -1,0 +1,55 @@
+{
+  "id": "dot-segment-ids",
+  "title": "An id is never '.', '..' or empty: the SDK refuses it before any request (it would change the route), and the API refuses what it can see",
+  "setup": [],
+  "steps": [
+    {
+      "name": "a balance read for the id '.' is refused before any request",
+      "as": "app",
+      "op": "credits.balance",
+      "input": { "customer": "." },
+      "expect": {
+        "error": { "class": "InvalidRequest", "status": 400, "code": "validation_error" }
+      }
+    },
+    {
+      "name": "a ledger read for the id '..' is refused before any request",
+      "as": "app",
+      "op": "credits.ledger",
+      "input": { "customer": ".." },
+      "expect": {
+        "error": { "class": "InvalidRequest", "status": 400, "code": "validation_error" }
+      }
+    },
+    {
+      "name": "a customer read for an empty id is refused before any request",
+      "as": "app",
+      "op": "customers.get",
+      "input": { "customer": "" },
+      "expect": {
+        "error": { "class": "InvalidRequest", "status": 400, "code": "validation_error" }
+      }
+    },
+    {
+      "name": "a plan subscription for the id '.' is refused before any request",
+      "as": "app",
+      "op": "plans.subscribe",
+      "input": { "customer": ".", "plan": "free" },
+      "expect": {
+        "error": { "class": "InvalidRequest", "status": 400, "code": "validation_error" }
+      }
+    },
+    {
+      "name": "the API refuses a customer created with the id '.'",
+      "as": "app",
+      "http": { "method": "POST", "path": "/v1/customers", "body": { "externalId": "." } },
+      "expect": { "status": 400, "body": { "error": { "code": "validation_error" } } }
+    },
+    {
+      "name": "the API refuses a customer created with the id '..'",
+      "as": "app",
+      "http": { "method": "POST", "path": "/v1/customers", "body": { "externalId": ".." } },
+      "expect": { "status": 400, "body": { "error": { "code": "validation_error" } } }
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "id": "plan-usage",
+  "title": "The plan and this month's usage can be read; the included volume and retention are flagged unconfirmed, never a guarantee",
+  "setup": [],
+  "steps": [
+    {
+      "name": "the project's plan, the period and a usage count",
+      "op": "plan.usage",
+      "input": {},
+      "expect": {
+        "ok": {
+          "plan": { "key": "$string", "name": "$string" },
+          "period": { "start": "$string", "end": "$string" },
+          "usage": { "events": "$int" }
+        }
+      }
+    },
+    {
+      "name": "the limits are inside unconfirmedLimits and say they are not confirmed",
+      "op": "plan.usage",
+      "input": {},
+      "expect": { "ok": { "unconfirmedLimits": { "confirmed": false, "note": "$string" } } }
+    },
+    {
+      "name": "a key without plans:read cannot read it",
+      "as": "limited",
+      "op": "plan.usage",
+      "input": {},
+      "expect": { "error": { "class": "AuthError", "status": 403, "code": "missing_scope" } }
+    },
+    {
+      "name": "no credential is 401",
+      "as": "none",
+      "http": { "method": "GET", "path": "/v1/plan-usage" },
+      "expect": { "status": 401, "body": { "error": { "code": "unauthenticated" } } }
+    }
+  ]
+}

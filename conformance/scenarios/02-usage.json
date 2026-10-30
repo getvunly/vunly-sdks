@@ -1,0 +1,235 @@
+{
+  "id": "usage",
+  "title": "Recording usage: rounding up per call, counted once per id, a refused call changes nothing",
+  "setup": [
+    {
+      "name": "meter",
+      "http": {
+        "method": "POST",
+        "path": "/v1/meters",
+        "body": { "key": "tokens", "unitsPerCredit": 1000 }
+      },
+      "expect": { "status": [200, 201] }
+    },
+    {
+      "name": "plan",
+      "http": {
+        "method": "POST",
+        "path": "/v1/plans",
+        "body": {
+          "key": "starter-{{run}}",
+          "name": "Starter",
+          "includedCredits": 100,
+          "meter": "tokens",
+          "features": ["generate"]
+        }
+      },
+      "expect": { "status": [200, 201] }
+    },
+    {
+      "name": "customer",
+      "http": {
+        "method": "POST",
+        "path": "/v1/customers",
+        "body": { "externalId": "cus-{{run}}" }
+      },
+      "expect": { "status": [200, 201] }
+    },
+    {
+      "name": "subscribe",
+      "http": {
+        "method": "POST",
+        "path": "/v1/customers/cus-{{run}}/subscription",
+        "body": { "plan": "starter-{{run}}" }
+      },
+      "expect": { "status": [200, 201] }
+    }
+  ],
+  "steps": [
+    {
+      "name": "1050 units at 1000 per credit cost 2 credits (rounded up per call)",
+      "op": "usage.record",
+      "input": {
+        "id": "use-{{run}}-1",
+        "customer": "cus-{{run}}",
+        "meter": "tokens",
+        "quantity": 1050
+      },
+      "expect": {
+        "ok": {
+          "remaining": 98,
+          "replayed": false,
+          "event": { "kind": "debit", "credits": -2, "quantity": 1050 }
+        }
+      }
+    },
+    {
+      "name": "the same id and payload again is a replay: nothing debited",
+      "op": "usage.record",
+      "input": {
+        "id": "use-{{run}}-1",
+        "customer": "cus-{{run}}",
+        "meter": "tokens",
+        "quantity": 1050
+      },
+      "expect": { "ok": { "remaining": 98, "replayed": true } }
+    },
+    {
+      "name": "the same id with another payload is a conflict",
+      "op": "usage.record",
+      "input": {
+        "id": "use-{{run}}-1",
+        "customer": "cus-{{run}}",
+        "meter": "tokens",
+        "quantity": 2000
+      },
+      "expect": {
+        "error": { "class": "InvalidRequest", "status": 409, "code": "idempotency_conflict" }
+      }
+    },
+    {
+      "name": "one unit costs one whole credit",
+      "op": "usage.record",
+      "input": {
+        "id": "use-{{run}}-2",
+        "customer": "cus-{{run}}",
+        "meter": "tokens",
+        "quantity": 1
+      },
+      "expect": { "ok": { "remaining": 97, "replayed": false, "event": { "credits": -1 } } }
+    },
+    {
+      "name": "balance shows 3 consumed of 100",
+      "op": "credits.balance",
+      "input": { "customer": "cus-{{run}}" },
+      "expect": { "ok": { "remaining": 97, "consumed": 3, "granted": 100 } }
+    },
+    {
+      "name": "quantity 0 is invalid",
+      "op": "usage.record",
+      "input": {
+        "id": "use-{{run}}-3",
+        "customer": "cus-{{run}}",
+        "meter": "tokens",
+        "quantity": 0
+      },
+      "expect": {
+        "error": { "class": "InvalidRequest", "status": 400, "code": "validation_error" }
+      }
+    },
+    {
+      "name": "an id that cannot be an Idempotency-Key is invalid",
+      "op": "usage.record",
+      "input": { "id": "short", "customer": "cus-{{run}}", "meter": "tokens", "quantity": 1 },
+      "expect": {
+        "error": { "class": "InvalidRequest", "status": 400, "code": "validation_error" }
+      }
+    },
+    {
+      "name": "an unknown meter is refused and bills nothing",
+      "op": "usage.record",
+      "input": {
+        "id": "use-{{run}}-4",
+        "customer": "cus-{{run}}",
+        "meter": "no-such-meter",
+        "quantity": 5
+      },
+      "expect": { "error": { "class": "InvalidRequest", "status": 404, "code": "meter_not_found" } }
+    },
+    {
+      "name": "an unknown customer is not found",
+      "op": "usage.record",
+      "input": {
+        "id": "use-{{run}}-5",
+        "customer": "nobody-{{run}}",
+        "meter": "tokens",
+        "quantity": 5
+      },
+      "expect": { "error": { "class": "InvalidRequest", "status": 404, "code": "not_found" } }
+    },
+    {
+      "name": "more than the balance is a hard stop (402)",
+      "op": "usage.record",
+      "input": {
+        "id": "use-{{run}}-6",
+        "customer": "cus-{{run}}",
+        "meter": "tokens",
+        "quantity": 200000
+      },
+      "expect": {
+        "error": { "class": "LimitReached", "status": 402, "code": "insufficient_credits" }
+      }
+    },
+    {
+      "name": "the refused call changed nothing",
+      "op": "credits.balance",
+      "input": { "customer": "cus-{{run}}" },
+      "expect": { "ok": { "remaining": 97, "consumed": 3, "granted": 100 } }
+    },
+    {
+      "name": "a refused id may be retried: it is refused again, not remembered as spent",
+      "op": "usage.record",
+      "input": {
+        "id": "use-{{run}}-6",
+        "customer": "cus-{{run}}",
+        "meter": "tokens",
+        "quantity": 200000
+      },
+      "expect": {
+        "error": { "class": "LimitReached", "status": 402, "code": "insufficient_credits" }
+      }
+    },
+    {
+      "name": "exactly the balance is allowed",
+      "op": "usage.record",
+      "input": {
+        "id": "use-{{run}}-7",
+        "customer": "cus-{{run}}",
+        "meter": "tokens",
+        "quantity": 97000
+      },
+      "expect": { "ok": { "remaining": 0, "replayed": false } }
+    },
+    {
+      "name": "at zero any usage is refused",
+      "op": "usage.record",
+      "input": {
+        "id": "use-{{run}}-8",
+        "customer": "cus-{{run}}",
+        "meter": "tokens",
+        "quantity": 1
+      },
+      "expect": {
+        "error": { "class": "LimitReached", "status": 402, "code": "insufficient_credits" }
+      }
+    },
+    {
+      "name": "replaying an id that was already recorded still answers, even at zero balance: record is idempotent, only the entitlement check refuses",
+      "op": "usage.record",
+      "input": {
+        "id": "use-{{run}}-7",
+        "customer": "cus-{{run}}",
+        "meter": "tokens",
+        "quantity": 97000
+      },
+      "expect": { "ok": { "remaining": 0, "replayed": true } }
+    },
+    {
+      "name": "and an earlier id too",
+      "op": "usage.record",
+      "input": {
+        "id": "use-{{run}}-1",
+        "customer": "cus-{{run}}",
+        "meter": "tokens",
+        "quantity": 1050
+      },
+      "expect": { "ok": { "replayed": true } }
+    },
+    {
+      "name": "the replays changed nothing",
+      "op": "credits.balance",
+      "input": { "customer": "cus-{{run}}" },
+      "expect": { "ok": { "remaining": 0, "consumed": 100, "granted": 100 } }
+    }
+  ]
+}

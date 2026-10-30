@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Both are LTS. .NET 8 reaches the end of Microsoft's support on 2026-11-10 (dotnet.microsoft.com support policy, read
+         2026-10-27): the net8.0 target is removed in the first release after that date. -->
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <RootNamespace>Vunly</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- CS1591: every public member carries a comment where it adds something; the trivial record properties do not.
+         CS1573: a record's positional parameters are documented only where they need a sentence. -->
+    <NoWarn>$(NoWarn);CS1591;CS1573</NoWarn>
+
+    <!-- The package id is local: this SDK is not published to a package registry. -->
+    <PackageId>Vunly</PackageId>
+    <Version>0.1.0</Version>
+    <Title>Vunly .NET SDK</Title>
+    <Description>.NET client for the Vunly sandbox API: record usage, check entitlements, grant credits. No dependencies.</Description>
+    <Authors>Vunly</Authors>
+    <Company>Vunly</Company>
+    <Copyright>Copyright 2026 Vunly</Copyright>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/getvunly/vunly-sdks</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/getvunly/vunly-sdks</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>vunly;billing;usage;metering;credits</PackageTags>
+    <PackageReleaseNotes>See CHANGELOG.md</PackageReleaseNotes>
+    <!-- Debug symbols are embedded in the assembly, so there is no separate symbols package to publish. -->
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <DebugType>embedded</DebugType>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+    <None Include="..\..\LICENSE" Pack="true" PackagePath="\" />
+    <None Include="..\..\NOTICE" Pack="true" PackagePath="\" />
+    <InternalsVisibleTo Include="Vunly.Tests" />
+    <InternalsVisibleTo Include="Vunly.Extensions.DependencyInjection" />
+  </ItemGroup>
+
+</Project>

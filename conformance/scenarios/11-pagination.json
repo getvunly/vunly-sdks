@@ -1,0 +1,133 @@
+{
+  "id": "pagination",
+  "title": "Lists are paged with an opaque cursor, newest first; the last page has a null cursor; a bad cursor or limit is refused",
+  "setup": [
+    {
+      "name": "customer",
+      "http": {
+        "method": "POST",
+        "path": "/v1/customers",
+        "body": { "externalId": "cus-{{run}}" }
+      },
+      "expect": { "status": [200, 201] }
+    },
+    {
+      "name": "grant 1",
+      "http": {
+        "method": "POST",
+        "path": "/v1/customers/cus-{{run}}/credit-grants",
+        "body": { "credits": 1, "reason": "p1" },
+        "headers": { "Idempotency-Key": "page-{{run}}-1" }
+      },
+      "expect": { "status": 201 }
+    },
+    {
+      "name": "grant 2",
+      "http": {
+        "method": "POST",
+        "path": "/v1/customers/cus-{{run}}/credit-grants",
+        "body": { "credits": 2, "reason": "p2" },
+        "headers": { "Idempotency-Key": "page-{{run}}-2" }
+      },
+      "expect": { "status": 201 }
+    },
+    {
+      "name": "grant 3",
+      "http": {
+        "method": "POST",
+        "path": "/v1/customers/cus-{{run}}/credit-grants",
+        "body": { "credits": 3, "reason": "p3" },
+        "headers": { "Idempotency-Key": "page-{{run}}-3" }
+      },
+      "expect": { "status": 201 }
+    },
+    {
+      "name": "grant 4",
+      "http": {
+        "method": "POST",
+        "path": "/v1/customers/cus-{{run}}/credit-grants",
+        "body": { "credits": 4, "reason": "p4" },
+        "headers": { "Idempotency-Key": "page-{{run}}-4" }
+      },
+      "expect": { "status": 201 }
+    },
+    {
+      "name": "grant 5",
+      "http": {
+        "method": "POST",
+        "path": "/v1/customers/cus-{{run}}/credit-grants",
+        "body": { "credits": 5, "reason": "p5" },
+        "headers": { "Idempotency-Key": "page-{{run}}-5" }
+      },
+      "expect": { "status": 201 }
+    }
+  ],
+  "steps": [
+    {
+      "name": "page 1: two newest entries and a cursor",
+      "as": "admin",
+      "op": "credits.ledger",
+      "input": { "customer": "cus-{{run}}", "limit": 2 },
+      "expect": {
+        "ok": { "data": [{ "reason": "p5" }, { "reason": "p4" }], "nextCursor": "$string" }
+      },
+      "capture": { "c1": "nextCursor" }
+    },
+    {
+      "name": "page 2 from that cursor",
+      "as": "admin",
+      "op": "credits.ledger",
+      "input": { "customer": "cus-{{run}}", "limit": 2, "cursor": "{{c1}}" },
+      "expect": {
+        "ok": { "data": [{ "reason": "p3" }, { "reason": "p2" }], "nextCursor": "$string" }
+      },
+      "capture": { "c2": "nextCursor" }
+    },
+    {
+      "name": "the last page has one entry and a null cursor",
+      "as": "admin",
+      "op": "credits.ledger",
+      "input": { "customer": "cus-{{run}}", "limit": 2, "cursor": "{{c2}}" },
+      "expect": { "ok": { "data": [{ "reason": "p1" }], "nextCursor": "$null" } }
+    },
+    {
+      "name": "a cursor that is not one is refused",
+      "as": "admin",
+      "op": "credits.ledger",
+      "input": { "customer": "cus-{{run}}", "cursor": "not-a-cursor" },
+      "expect": {
+        "error": { "class": "InvalidRequest", "status": 400, "code": "validation_error" }
+      }
+    },
+    {
+      "name": "a limit above 100 is refused",
+      "as": "admin",
+      "op": "credits.ledger",
+      "input": { "customer": "cus-{{run}}", "limit": 101 },
+      "expect": {
+        "error": { "class": "InvalidRequest", "status": 400, "code": "validation_error" }
+      }
+    },
+    {
+      "name": "customers are paged too: one per page, and there is a next page",
+      "as": "admin",
+      "op": "customers.list",
+      "input": { "limit": 1 },
+      "expect": { "ok": { "data": ["$any"], "nextCursor": "$string" } }
+    },
+    {
+      "name": "one customer by the caller's own id",
+      "as": "admin",
+      "op": "customers.get",
+      "input": { "customer": "cus-{{run}}" },
+      "expect": { "ok": { "externalId": "cus-{{run}}" } }
+    },
+    {
+      "name": "an unknown customer is not_found, final",
+      "as": "admin",
+      "op": "customers.get",
+      "input": { "customer": "nobody-{{run}}" },
+      "expect": { "error": { "class": "InvalidRequest", "status": 404, "code": "not_found" } }
+    }
+  ]
+}

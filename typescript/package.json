@@ -1,0 +1,28 @@
+{
+  "name": "@vunly/sdk",
+  "version": "0.1.0",
+  "description": "Minimal Vunly TypeScript client (fetch only, zero dependencies). Sandbox only.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/getvunly/vunly-sdks.git",
+    "directory": "typescript"
+  },
+  "homepage": "https://github.com/getvunly/vunly-sdks",
+  "bugs": {
+    "url": "https://github.com/getvunly/vunly-sdks/issues"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test --no-warnings test/*.test.ts",
+    "pack:local": "node scripts/pack-public.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "typescript": "5.9.3"
+  }
+}
