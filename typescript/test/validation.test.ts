@@ -56,6 +56,10 @@ const REGISTRY: Record<string, Entry> = {
     run: (c) => c.usage.record({ id: ID, customer: "c", meter: "m", quantity: 1 }),
     good: { event: ENTRY, balance: 1 },
   },
+  "usage.recordBatch": {
+    run: (c) => c.usage.recordBatch([{ id: ID, customer: "cus_c", meter: "m", quantity: 1 }]),
+    good: { results: [{ id: ID, status: "accepted", balance: 1 }] },
+  },
   "credits.balance": {
     run: (c) => c.credits.balance({ customer: "c" }),
     good: { credits: 1, consumed: 0, granted: 1 },
@@ -173,6 +177,8 @@ function methodPaths(obj: unknown, prefix = ""): string[] {
   const out: string[] = [];
   for (const [k, v] of Object.entries(obj)) {
     const path = prefix ? `${prefix}.${k}` : k;
+    // `usage.batcher` builds a local buffer, not a request: its calls are `usage.recordBatch` (listed below, and batch.test.ts)
+    if (path === "usage.batcher") continue;
     if (typeof v === "function") out.push(path);
     else if (typeof v === "object" && v !== null) out.push(...methodPaths(v, path));
   }

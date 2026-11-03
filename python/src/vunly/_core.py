@@ -182,7 +182,8 @@ def error_from(response: httpx.Response) -> VunlyError:
     message = str(err.get("message") or f"request failed with status {status}")
     if status == 404 and "no such route" in message.lower():
         message += WRONG_ROUTE_HINT
-    error = classify(status)(code, message, status, err.get("requestId") or response.headers.get("request-id"), err.get("details"))
+    details = err.get("details")
+    error = classify(status, code, details if isinstance(details, dict) else None)(code, message, status, err.get("requestId") or response.headers.get("request-id"), details)
     if isinstance(error, Unavailable):
         error.retry_after_seconds = parse_retry_after(response.headers.get("retry-after"))
     return error
@@ -219,7 +220,8 @@ def shape_problem(data: Any, shape: Mapping[str, str]) -> str | None:
 
 
 def is_plan_stop(response: httpx.Response) -> bool:
-    """A 429 that is the Free plan's volume stop, not a rate limit: ``Retry-After`` is the time to next month. Never retried."""
+    """A 429 that is the plan's volume stop, not a rate limit: only an OLDER server answers it that way (it is 402
+    ``plan_limit_reached`` now, which is never retried). ``Retry-After`` is then the time to next month. Never retried."""
     if response.status_code != 429:
         return False
     try:
@@ -365,6 +367,216 @@ def usage_record(id_: str, customer: str, meter: str, quantity: int) -> Spec:
         ),
         shape={"balance": "int", **{f"event.{k}": v for k, v in _ENTRY.items()}},
     )
+
+
+BATCH_MAX = 100
+_CUSTOMER_ID = re.compile(r"^cus_[A-Za-z0-9]+\Z")
+_METER_KEY = re.compile(r"^[a-z0-9][a-z0-9_.-]*\Z")
+
+
+def _invalid(field_: str, why: str, message: str) -> VunlyError:
+    from .errors import InvalidRequest
+
+    return InvalidRequest("validation_error", message, 400, None, {"fields": {field_: why}})
+
+
+def wire_event(e: "models.BatchEvent | Mapping[str, Any]") -> dict[str, Any]:
+    """The wire form of one batch event, validated as the route validates it, so a bad event never costs a round trip.
+
+    ``occurred_at`` left out is stamped now (UTC): the stamp is part of the returned dict, so a resend carries the same one.
+    """
+    from datetime import datetime, timezone
+
+    if isinstance(e, Mapping):
+        e = models.BatchEvent(
+            e.get("id"), e.get("customer"), e.get("meter"), e.get("quantity"), e.get("occurred_at")  # type: ignore[arg-type]
+        )
+    check_id(e.id)
+    if not isinstance(e.customer, str) or not _CUSTOMER_ID.match(e.customer) or len(e.customer) > 128:
+        raise _invalid(
+            "customer",
+            "a Vunly cus_ id",
+            "the batch route takes the Vunly customer id (cus_..., the id customers.upsert returns), not your external id",
+        )
+    if not isinstance(e.meter, str) or not _METER_KEY.match(e.meter) or len(e.meter) > 64:
+        raise _invalid("meter", "1-64 chars of a-z0-9_.-", "meter is not a valid meter key")
+    if isinstance(e.quantity, bool) or not isinstance(e.quantity, int) or not 1 <= e.quantity <= 1_000_000_000:
+        raise _invalid("quantity", "an integer from 1 to 1000000000", "quantity must be an integer from 1 to 1000000000")
+    at = e.occurred_at
+    if at is None:
+        at = datetime.now(timezone.utc)
+    elif isinstance(at, str):
+        try:
+            at = datetime.fromisoformat(at.replace("Z", "+00:00"))
+        except ValueError:
+            raise _invalid("occurred_at", "a date", "occurred_at is not a valid date") from None
+    if not isinstance(at, datetime):
+        raise _invalid("occurred_at", "a date", "occurred_at is not a valid date")
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=timezone.utc)  # a naive time is read as UTC, said here so it is not a surprise
+    stamp = at.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return {"id": e.id, "customerId": e.customer, "meter": e.meter, "quantity": e.quantity, "occurredAt": stamp}
+
+
+def usage_record_batch(wire: list[dict[str, Any]]) -> Spec:
+    """``POST /v1/usage-events:batch`` for events already in wire form (``wire_event``). Retried like a keyed call: every event
+    carries its own id, so asking again after a lost answer records nothing twice."""
+    if not 1 <= len(wire) <= BATCH_MAX:
+        raise _invalid("events", "1 to 100 events", "a batch holds 1 to 100 events")
+    ids = [w["id"] for w in wire]
+    if len(set(ids)) != len(ids):
+        raise _invalid("events", "ids must be distinct", "an event id appears twice in the batch")
+
+    def parse(d: Mapping[str, Any], m: "Meta") -> models.BatchResponse:
+        raw = d["results"]
+        if len(raw) != len(ids) or any(r["id"] != i or not isinstance(r["status"], str) for r, i in zip(raw, ids)):
+            raise ValueError("the results do not match the events sent")
+        limit = d.get("planLimit")
+        return models.BatchResponse(
+            [models.BatchEventResult(r["id"], r["status"], r.get("balance")) for r in raw],
+            models.PlanLimitInfo(
+                limit["reason"], limit["plan"], limit["includedMonthlyVolume"], limit["used"]
+            )
+            if limit
+            else None,
+            m.plan_overage,
+            m.request_id,
+        )
+
+    return Spec("POST", "/v1/usage-events:batch", {"events": wire}, parse=parse, shape={"results": "list"}, retry_class="K")
+
+
+def batch_route_off(e: VunlyError) -> VunlyError | None:
+    """The clearer error for a 404 not_found from the batch route (it is off unless the deployment turned it on), else None."""
+    from .errors import InvalidRequest
+
+    if isinstance(e, InvalidRequest) and e.status == 404 and e.code == "not_found":
+        return InvalidRequest(
+            e.code,
+            "the batch route is not available for this project (it is off by default and, today, staging only): use usage.record",
+            e.status,
+            e.request_id,
+            e.details,
+        )
+    return None
+
+
+class BatchEntry:
+    """One event waiting in a batcher, with how many times it has been sent."""
+
+    __slots__ = ("wire", "attempts", "waiter")
+
+    def __init__(self, wire: dict[str, Any], waiter: Any) -> None:
+        self.wire = wire
+        self.attempts = 0
+        self.waiter = waiter  # whatever the batcher resolves (a Future, an asyncio.Future)
+
+
+class BatchBuffer:
+    """The I/O-free state of a batcher: a bounded queue, the attempts of each event and what to do with an answer.
+
+    Final outcomes are ``accepted``, ``duplicate``, ``insufficient_credits``, ``too_late``, ``meter_not_found``,
+    ``plan_limit_reached`` and ``error`` (never resent), ``unavailable`` after ``max_attempts`` sends (not recorded, safe to
+    send again later with the same id), or an exception for a failure a resend cannot fix (a bad key, a frozen project, a route
+    that is off, a malformed answer).
+    """
+
+    def __init__(self, max_batch_size: int, max_pending: int, max_attempts: int, policy: RetryPolicy) -> None:
+        if not isinstance(max_batch_size, int) or not 1 <= max_batch_size <= BATCH_MAX:
+            raise ValueError("max_batch_size must be an integer from 1 to 100")
+        if not isinstance(max_pending, int) or max_pending < 1:
+            raise ValueError("max_pending must be at least 1")
+        if not isinstance(max_attempts, int) or max_attempts < 1:
+            raise ValueError("max_attempts must be at least 1")
+        self.size, self.max_pending, self.max_attempts, self.policy = max_batch_size, max_pending, max_attempts, policy
+        self.queue: list[BatchEntry] = []
+        self.in_flight = 0
+        self.by_id: dict[str, BatchEntry] = {}
+
+    @property
+    def pending(self) -> int:
+        return len(self.queue) + self.in_flight
+
+    def add(self, wire: dict[str, Any], waiter_factory: Callable[[], Any]) -> tuple[BatchEntry, bool]:
+        """Queues ``wire``. Returns ``(entry, new)``: the same event added twice is one entry (``new`` False)."""
+        known = self.by_id.get(wire["id"])
+        if known is not None:
+            same = all(known.wire[k] == wire[k] for k in ("customerId", "meter", "quantity"))
+            if not same:
+                from .errors import InvalidRequest
+
+                raise InvalidRequest(
+                    "idempotency_conflict", "this id is already queued with a different customer, meter or quantity", 409
+                )
+            return known, False
+        if self.pending >= self.max_pending:
+            raise Unavailable("unavailable", f"the batcher already holds {self.max_pending} events: slow down or flush", 0)
+        entry = BatchEntry(wire, waiter_factory())
+        self.by_id[wire["id"]] = entry
+        self.queue.append(entry)
+        return entry, True
+
+    def take(self) -> list[BatchEntry]:
+        taken, self.queue = self.queue[: self.size], self.queue[self.size :]
+        self.in_flight += len(taken)
+        return taken
+
+    def finish(self, taken: list[BatchEntry]) -> None:
+        self.in_flight -= len(taken)
+
+    def _settle(self, entry: BatchEntry) -> None:
+        self.by_id.pop(entry.wire["id"], None)
+
+    def apply(
+        self, taken: list[BatchEntry], response: "models.BatchResponse | None", error: Exception | None
+    ) -> tuple[list[tuple[BatchEntry, Any, bool]], list[BatchEntry], float | None]:
+        """Digests one answer. Returns ``(done, again, retry_after)``: ``done`` is ``(entry, value, is_error)``, ``again`` the
+        entries to send again, ``retry_after`` the server's wait in seconds when the whole request said so."""
+        done: list[tuple[BatchEntry, Any, bool]] = []
+        again: list[BatchEntry] = []
+        retry_after: float | None = None
+
+        def unavailable_or_again(entry: BatchEntry) -> None:
+            entry.attempts += 1
+            if entry.attempts >= self.max_attempts:
+                self._settle(entry)
+                done.append((entry, models.BatchEventResult(entry.wire["id"], "unavailable"), False))
+            else:
+                again.append(entry)
+
+        if error is None and response is not None:
+            for entry, r in zip(taken, response.results):
+                if r.status == "unavailable":
+                    unavailable_or_again(entry)
+                else:
+                    self._settle(entry)
+                    done.append((entry, r, False))
+        elif isinstance(error, Unavailable) and error.code not in ("invalid_response", "unexpected_redirect"):
+            # the whole request could not be answered (a 503 that survived the client's retries, a network failure): nothing was
+            # confirmed, so every event is sent again with its id, and counts the attempt
+            retry_after = error.retry_after_seconds
+            for entry in taken:
+                unavailable_or_again(entry)
+        else:
+            for entry in taken:
+                self._settle(entry)
+                done.append((entry, error, True))
+        return done, again, retry_after
+
+    def wait_for(self, again: list[BatchEntry], retry_after: float | None) -> float | None:
+        """Seconds to wait before sending ``again``, or None when the server asked for longer than the SDK waits."""
+        attempt = max(e.attempts for e in again)
+        return self.policy.delay(attempt, None if retry_after is None else repr(retry_after))
+
+    def give_up(self, again: list[BatchEntry]) -> list[tuple[BatchEntry, Any, bool]]:
+        out: list[tuple[BatchEntry, Any, bool]] = []
+        for entry in again:
+            self._settle(entry)
+            out.append((entry, models.BatchEventResult(entry.wire["id"], "unavailable"), False))
+        return out
+
+    def requeue(self, again: list[BatchEntry]) -> None:
+        self.queue = [*again, *self.queue]
 
 
 def entitlements_check(customer: str, feature: str, estimate: Mapping[str, Any] | None) -> Spec:

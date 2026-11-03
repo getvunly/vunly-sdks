@@ -85,6 +85,53 @@ class Entitlement:
 
 
 @dataclass(frozen=True)
+class BatchEvent:
+    """One usage event of a batch (``usage.record_batch`` and the batchers)."""
+
+    #: 8 to 128 characters of ``A-Za-z0-9_.:-``. Stable per unit of work: it is what makes a resend safe.
+    id: str
+    #: The Vunly customer id (``cus_...``, the ``id`` that ``customers.upsert`` returns). The batch route does not take your own external id.
+    customer: str
+    meter: str
+    #: A positive integer in the meter's own units.
+    quantity: int
+    #: When the event happened (a ``datetime`` or an ISO-8601 string). Required by the API: if you leave it out the SDK stamps the
+    #: time you handed the event over and keeps that stamp for every resend (an event older than 24 hours is ``too_late``).
+    occurred_at: Any = None
+
+
+@dataclass(frozen=True)
+class BatchEventResult:
+    """What happened to one event of a batch. ``status`` is one of ``accepted``, ``duplicate``, ``insufficient_credits``,
+    ``too_late``, ``meter_not_found``, ``plan_limit_reached``, ``error`` and ``unavailable`` (NOT recorded: safe to send again
+    with the same ``id``)."""
+
+    id: str
+    status: str
+    #: The customer's balance after this event (present for recorded events).
+    balance: int | None = None
+
+
+@dataclass(frozen=True)
+class PlanLimitInfo:
+    reason: str
+    plan: str
+    included_monthly_volume: int
+    used: int
+
+
+@dataclass(frozen=True)
+class BatchResponse:
+    #: One per event, in the order sent.
+    results: list[BatchEventResult]
+    #: Present when at least one event is ``plan_limit_reached``.
+    plan_limit: PlanLimitInfo | None
+    #: True when a paid plan is past its included volume (it keeps recording).
+    plan_overage: bool
+    request_id: str | None = None
+
+
+@dataclass(frozen=True)
 class CustomerToken:
     id: str
     token: str  # shown once; a browser may hold it, never an API key

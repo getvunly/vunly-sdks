@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, Awaitable, Callable, Mapping
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Mapping, Sequence
 
 import httpx
 
@@ -14,6 +14,8 @@ from ._version import __version__
 from .errors import Unavailable, VunlyError
 from .models import (
     Balance,
+    BatchEvent,
+    BatchResponse,
     Customer,
     CustomerToken,
     Entitlement,
@@ -23,6 +25,9 @@ from .models import (
     Raw,
     UsageResult,
 )
+
+if TYPE_CHECKING:
+    from .batcher import AsyncUsageBatcher, UsageBatcher
 
 __all__ = ["Client", "AsyncClient"]
 
@@ -347,6 +352,43 @@ class _Usage:
         """
         return self._c._do(_core.usage_record(id, customer, meter, quantity))
 
+    def record_batch(self, events: Sequence["BatchEvent | Mapping[str, Any]"]) -> BatchResponse:
+        """Record 1 to 100 events in ONE request through the batch route and return one result per event, in order.
+
+        A request that is answered is not an error even when some events are not recorded: read each ``status``. Idempotent by each
+        event's ``id`` for 24 hours. A whole-batch 503 is retried with the same ids after its ``Retry-After`` and surfaces as
+        ``Unavailable`` when it survives the retries. Events with status ``unavailable`` were NOT recorded: send only those again,
+        with the same ids (``usage.batcher()`` does it for you). The route is OFF unless the deployment turned it on for the
+        project: until then this raises ``InvalidRequest`` (``not_found``, 404). ``customer`` is the Vunly ``cus_...`` id.
+        """
+        spec = _core.usage_record_batch([_core.wire_event(e) for e in events])
+        try:
+            return self._c._do(spec)
+        except VunlyError as e:
+            raise (_core.batch_route_off(e) or e) from None
+
+    def batcher(
+        self,
+        *,
+        max_batch_size: int = 100,
+        flush_interval: float = 1.0,
+        max_pending: int = 10_000,
+        max_attempts: int = 5,
+    ) -> "UsageBatcher":
+        """A buffer in front of ``record_batch``: ``add`` events as they happen (it returns a ``Future`` of the event's final
+        outcome); a background thread sends up to 100 at a time, every ``flush_interval`` seconds, and sends ``unavailable``
+        events again with the same ids (waiting at least ``Retry-After``, then backing off, at most ``max_attempts`` sends).
+        Call ``close()`` (or use ``with``) before the process ends."""
+        from .batcher import UsageBatcher
+
+        return UsageBatcher(
+            self._c,
+            max_batch_size=max_batch_size,
+            flush_interval=flush_interval,
+            max_pending=max_pending,
+            max_attempts=max_attempts,
+        )
+
 
 class _Entitlements:
     def __init__(self, c: Client) -> None:
@@ -423,6 +465,33 @@ class _AUsage:
 
     async def record(self, id: str, customer: str, meter: str, quantity: int) -> UsageResult:
         return await self._c._do(_core.usage_record(id, customer, meter, quantity))
+
+    async def record_batch(self, events: Sequence["BatchEvent | Mapping[str, Any]"]) -> BatchResponse:
+        """As ``Client.usage.record_batch``."""
+        spec = _core.usage_record_batch([_core.wire_event(e) for e in events])
+        try:
+            return await self._c._do(spec)
+        except VunlyError as e:
+            raise (_core.batch_route_off(e) or e) from None
+
+    def batcher(
+        self,
+        *,
+        max_batch_size: int = 100,
+        flush_interval: float = 1.0,
+        max_pending: int = 10_000,
+        max_attempts: int = 5,
+    ) -> "AsyncUsageBatcher":
+        """As ``Client.usage.batcher``, for asyncio: ``await batcher.add(event)`` returns the event's final outcome."""
+        from .batcher import AsyncUsageBatcher
+
+        return AsyncUsageBatcher(
+            self._c,
+            max_batch_size=max_batch_size,
+            flush_interval=flush_interval,
+            max_pending=max_pending,
+            max_attempts=max_attempts,
+        )
 
 
 class _AEntitlements:

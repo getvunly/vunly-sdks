@@ -1,6 +1,6 @@
 {
   "name": "@vunly/sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Minimal Vunly TypeScript client (fetch only, zero dependencies). Sandbox only.",
   "type": "module",
   "license": "Apache-2.0",
@@ -18,7 +18,7 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test --no-warnings test/*.test.ts",
+    "test": "node --test --test-concurrency=2 --no-warnings test/*.test.ts",
     "pack:local": "node scripts/pack-public.mjs"
   },
   "devDependencies": {

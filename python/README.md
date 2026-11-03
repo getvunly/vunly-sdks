@@ -49,20 +49,66 @@ Asyncio: `from vunly import AsyncClient`, `async with AsyncClient(...) as vunly:
 
 `AsyncClient` has the same calls; `await` each one.
 
-| Call                                                         | What it does                                                |
-| ------------------------------------------------------------ | ----------------------------------------------------------- |
-| `customers.upsert(id, name=None)`                            | Create a customer, or update it; repeating changes nothing  |
-| `entitlements.check(customer, feature, estimate=None)`       | Ask whether the customer may do this before the work        |
-| `usage.record(id, customer, meter, quantity)`                | Record usage once; a repeated `id` returns `replayed: true` |
-| `credits.balance(customer)`                                  | `remaining`, `consumed` and `granted`                       |
-| `credits.grant(id, customer, credits, reason=None)`          | Sandbox top-up, once per `id`                               |
-| `credits.usage(customer)`                                    | This period's consumption per meter, with plan and balance  |
-| `plans.upsert_meter(key, units_per_credit)`                  | Define a meter and how many units one credit covers         |
-| `plans.upsert(key, name, included_credits, meter, features)` | Define a plan                                               |
-| `plans.subscribe(customer, plan)`                            | Put a customer on a plan                                    |
-| `plans.cancel(customer)`                                     | End the customer's plan                                     |
-| `customer_tokens.create(customer, ttl_seconds=None)`         | A read-only token for one customer's widget, 30 to 3600 s   |
-| `customer_tokens.revoke(id)`                                 | Revoke a token before it expires                            |
+| Call                                                         | What it does                                                    |
+| ------------------------------------------------------------ | --------------------------------------------------------------- |
+| `customers.upsert(id, name=None)`                            | Create a customer, or update it; repeating changes nothing      |
+| `entitlements.check(customer, feature, estimate=None)`       | Ask whether the customer may do this before the work            |
+| `usage.record(id, customer, meter, quantity)`                | Record usage once; a repeated `id` returns `replayed: true`     |
+| `usage.record_batch(events)`                                 | 1 to 100 events in one request, one result each (see "Batches") |
+| `usage.batcher(...)`                                         | A buffer in front of `record_batch` (see "Batches")             |
+| `credits.balance(customer)`                                  | `remaining`, `consumed` and `granted`                           |
+| `credits.grant(id, customer, credits, reason=None)`          | Sandbox top-up, once per `id`                                   |
+| `credits.usage(customer)`                                    | This period's consumption per meter, with plan and balance      |
+| `plans.upsert_meter(key, units_per_credit)`                  | Define a meter and how many units one credit covers             |
+| `plans.upsert(key, name, included_credits, meter, features)` | Define a plan                                                   |
+| `plans.subscribe(customer, plan)`                            | Put a customer on a plan                                        |
+| `plans.cancel(customer)`                                     | End the customer's plan                                         |
+| `customer_tokens.create(customer, ttl_seconds=None)`         | A read-only token for one customer's widget, 30 to 3600 s       |
+| `customer_tokens.revoke(id)`                                 | Revoke a token before it expires                                |
+
+## Batches
+
+`vunly.usage.record_batch(events)` sends 1 to 100 events in ONE request and returns one result per event, in order. An answered
+request is not an error even when some events are not recorded, so read each `status`. Only `unavailable` is sent again:
+
+| Status                 | Recorded              | Send again?                                                                               |
+| ---------------------- | --------------------- | ----------------------------------------------------------------------------------------- |
+| `accepted`             | yes                   | no                                                                                        |
+| `duplicate`            | already, charged once | no                                                                                        |
+| `unavailable`          | **no**                | **yes**, with the same `id` (the batcher does it for you)                                 |
+| `plan_limit_reached`   | no                    | no: your plan's monthly volume is used up; not before the next UTC month or a plan change |
+| `too_late`             | no                    | no: older than 24 hours, final                                                            |
+| `insufficient_credits` | no                    | no: your customer's balance is too low (not your plan's limits)                           |
+| `meter_not_found`      | no                    | no: create the meter first                                                                |
+| `error`                | no                    | no                                                                                        |
+
+An event is a `BatchEvent(id, customer, meter, quantity, occurred_at=None)` or a dict with those keys;
+`customer` is the Vunly `cus_...` id that `customers.upsert` returns, not your own id. If you leave `occurred_at` out the SDK
+stamps the time you handed the event over and keeps that stamp on every resend.
+
+```python
+with vunly.usage.batcher(max_batch_size=100, flush_interval=1.0) as batcher:
+    future = batcher.add({"id": "req_2026_0001", "customer": "cus_demo_01", "meter": "tokens", "quantity": 1050})
+    outcome = future.result()  # the final status of THIS event, once its batch has been sent
+# leaving the block flushes what is left; without `with`, call batcher.close() before the process ends
+```
+
+`AsyncClient` has the same: `async with vunly.usage.batcher() as batcher:` and `outcome = await batcher.add(event)`. The batcher
+sends up to 100 events at a time and at least every `flush_interval` seconds, sends `unavailable` events again with the same ids
+(waiting at least the `Retry-After`, then backing off, at most `max_attempts` sends, default 5; after that the status is
+`unavailable` and the event is not recorded) and holds at most `max_pending` events (default 10,000): past that `add` raises
+`Unavailable` instead of queueing without limit. A failure a resend cannot fix (`AuthError`, a frozen project) fails each queued
+event with that error. Keep `usage.record` for a one-off call that needs its answer in the request.
+
+**Many small batches.** The batch route also has a ceiling on how many _requests_ one project may send, separate from the plan's
+volume: where it is on (today, for allow-listed sandbox projects) it is 1,800 requests per 60 seconds per project and environment, counted
+across every process that uses the project's keys. At 100 events per request that is far above any plan; at one event per
+request it is 30 events a second. So send full batches: one `usage.batcher()` per process (not one per request or per
+customer), a `flush_interval` of a second or more, and let it fill. A refusal for this limit is a `429` with `Retry-After: 60`,
+longer than the 30 seconds the SDK waits, so the call raises `Unavailable`; the batcher sends those events again with the same
+ids, and a direct `record_batch` caller does the same after the wait. Nothing was recorded by a `429`.
+
+**The batch route is not available everywhere yet.** It is off unless the deployment turned it on for your project (today only for allow-listed sandbox projects); until then `record_batch` raises `InvalidRequest` (`not_found`, 404) and `usage.record` is the way to send usage.
 
 ## Webhooks: verify a delivery
 
@@ -91,12 +137,14 @@ def handle(raw_body: bytes, headers: dict[str, str]):
 
 A write carries its id as the `Idempotency-Key`, so the API applies it at most once. The client retries, with the **same id**:
 
-| What happened                            | Retried? | Wait                                                     |
-| ---------------------------------------- | -------- | -------------------------------------------------------- |
-| network failure, timeout                 | yes      | exponential backoff with jitter                          |
-| `429`                                    | yes      | `Retry-After` seconds (longer than 30 s: raises instead) |
-| `500`, `502`, `503`, `504`               | yes      | exponential backoff with jitter                          |
-| `402`, `400`, `401`, `403`, `404`, `409` | **no**   | raised at once                                           |
+| What happened                     | Retried? | Wait                                                                  |
+| --------------------------------- | -------- | --------------------------------------------------------------------- |
+| network failure, timeout          | yes      | exponential backoff with jitter                                       |
+| `429`                             | yes      | `Retry-After` seconds (longer than 30 s: raises instead)              |
+| `500`, `502`, `503`, `504`        | yes      | exponential backoff with jitter                                       |
+| `402 plan_limit_reached`          | **no**   | never before the next UTC month or a plan change (`PlanLimitReached`) |
+| `402 insufficient_credits`        | **no**   | raised at once (`LimitReached`)                                       |
+| `400`, `401`, `403`, `404`, `409` | **no**   | raised at once                                                        |
 
 Defaults: timeout 10 s, 2 retries (`max_retries=`, or `retry=RetryPolicy(...)`, `0` turns retries off). When retries run out you get `Unavailable`; it is still safe to retry later with the same id.
 
@@ -104,12 +152,14 @@ Defaults: timeout 10 s, 2 retries (`max_retries=`, or `retry=RetryPolicy(...)`, 
 
 All derive from `VunlyError` with `code`, `status`, `request_id` (quote it in support requests), `details`. The message never contains your key.
 
-| Class            | When                                                                                                                                                    |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AuthError`      | 401/403: unknown or revoked key, or a missing scope                                                                                                     |
-| `LimitReached`   | 402: too few credits; `details` has `balance` and `required`                                                                                            |
-| `InvalidRequest` | 400/404/409: bad fields, unknown customer or meter, an id reused with other data. An id that cannot be an Idempotency-Key is refused before any request |
-| `Unavailable`    | network failure, timeout, 429, 5xx after the retries, or a 3xx (`unexpected_redirect`: wrong base URL, never followed or retried)                       |
+| Class              | When                                                                                                                                                                                                                                                                                             |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `AuthError`        | 401/403: unknown or revoked key, or a missing scope                                                                                                                                                                                                                                              |
+| `LimitReached`     | 402 `insufficient_credits`: **your customer's** credit balance is too low (`details` has `balance` and `required`). Not your own plan's limits: that is `PlanLimitReached`                                                                                                                       |
+| `PlanLimitReached` | 402 `plan_limit_reached`: the plan's monthly volume is used up. **Not retryable** (no `Retry-After`, nothing recorded): it clears at `details["resetsAt"]` or on a higher plan; on Free's single-event route `details["alternative"]` is the batch route (`usage.record_batch`, `usage.batcher`) |
+| `ProjectFrozen`    | 403 `project_frozen`: the project is read-only (beyond the plan's project limit). Not a key problem, not retryable: upgrade or choose which projects stay active; reads still work                                                                                                               |
+| `InvalidRequest`   | 400/404/409: bad fields, unknown customer or meter, an id reused with other data. An id that cannot be an Idempotency-Key is refused before any request                                                                                                                                          |
+| `Unavailable`      | network failure, timeout, 429, 5xx after the retries, or a 3xx (`unexpected_redirect`: wrong base URL, never followed or retried)                                                                                                                                                                |
 
 ## The `vunly` command
 
@@ -135,7 +185,7 @@ python3 -m venv .venv
 
 ## Known limitations
 
-Status: **Implemented**. These are the limitations recorded for this SDK. A limitation does not mean the SDK is withdrawn; read it before you use the SDK.
+Status: **Beta**. These are the limitations recorded for this SDK. A limitation does not mean the SDK is withdrawn; read it before you use the SDK.
 
 - Webhook endpoint management, the delivery log, recipes, activity, exports, credit packs and billing calls (diagnostics and reconciliation) are available through the REST API; this SDK does not wrap them. Changing a plan, cancelling a pending plan change and reading a customer's own usage with a customer token are not wrapped either.
 - Proxy settings and custom certificate authorities are not verified.

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vunly"
-version = "0.1.0"
+version = "0.1.1"
 description = "Vunly client for Python: usage-based billing for AI products. Sandbox only. Sync and async, typed, retries only what is safe."
 readme = "README.md"
 requires-python = ">=3.10"

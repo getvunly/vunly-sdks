@@ -37,6 +37,10 @@ CASES: dict[str, dict[str, Any]] = {
         "good": {"customerId": "c", "balance": {"credits": 1, "granted": 1, "consumed": 0}, "meters": []},
     },
     "usage.record": {"args": {"id": ID, "customer": "c", "meter": "m", "quantity": 1}, "good": {"event": ENTRY, "balance": 1}},
+    "usage.record_batch": {
+        "args": {"events": [{"id": ID, "customer": "cus_c", "meter": "m", "quantity": 1}]},
+        "good": {"results": [{"id": ID, "status": "accepted", "balance": 1}]},
+    },
     "entitlements.check": {
         "args": {"customer": "c", "feature": "f"},
         "good": {"allowed": True, "reason": "ok", "remaining": 1, "required": 0},
@@ -59,6 +63,9 @@ def _method_paths(client: Any) -> list[str]:
         if rname.startswith("_") or type(resource).__module__ != client_module.__name__:
             continue
         for m in dir(resource):
+            # `batcher` builds a local buffer, not a request: its calls are `usage.record_batch`, covered below and in test_batch.py
+            if m == "batcher":
+                continue
             if not m.startswith("_") and callable(getattr(resource, m)):
                 out.append(f"{rname}.{m}")
     return sorted(out)

@@ -39,6 +39,24 @@ class LimitReached(VunlyError):
     """402: the customer has too few credits. Do not run the work. ``details`` has ``balance`` and ``required``. Never retried."""
 
 
+class PlanLimitReached(VunlyError):
+    """402 ``plan_limit_reached``: the plan's monthly usage volume is used up. NOT retryable.
+
+    Nothing was recorded and there is no ``Retry-After``: waiting does not clear it before ``details["resetsAt"]`` (the
+    start of the next UTC month) or an upgrade. Do not treat it as "service unavailable". On the Free plan's
+    single-event route ``details["route"]`` is ``"single"`` and ``details["alternative"]`` names the batch route
+    (``usage.record_batch`` / ``usage.batcher``). ``details["reason"]`` is ``"plan_included_volume"``.
+    """
+
+
+class ProjectFrozen(VunlyError):
+    """403 ``project_frozen``: the project is read-only because it is beyond the plan's project limit.
+
+    Not retryable and NOT a key problem (the key is fine): upgrade the plan or choose which projects stay active. Reads
+    keep working.
+    """
+
+
 class InvalidRequest(VunlyError):
     """400/404/409: fix the request (bad fields, unknown customer, an id reused with different data). Never retried."""
 
@@ -53,7 +71,12 @@ class Unavailable(VunlyError):
     retry_after_seconds: float | None = None
 
 
-def classify(status: int) -> type[VunlyError]:
+def classify(status: int, code: str = "", details: Mapping[str, Any] | None = None) -> type[VunlyError]:
+    # The code decides first. ``details["reason"]`` also marks a plan stop answered by a server that still used 429.
+    if code == "plan_limit_reached" or (isinstance(details, Mapping) and details.get("reason") == "plan_included_volume"):
+        return PlanLimitReached
+    if code == "project_frozen":
+        return ProjectFrozen
     if status == 402:
         return LimitReached
     if status in (401, 403):

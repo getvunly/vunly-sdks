@@ -15,6 +15,8 @@ from vunly import (
     Client,
     InvalidRequest,
     LimitReached,
+    PlanLimitReached,
+    ProjectFrozen,
     RetryPolicy,
     Unavailable,
     normalize_base_url,
@@ -379,25 +381,57 @@ def test_class_n_and_r_are_repeated_after_a_lost_answer() -> None:
     assert len(s3.seen) == 2
 
 
-def test_the_plan_volume_stop_is_not_a_rate_limit_and_is_never_waited_on() -> None:
-    stop = httpx.Response(
-        429,
-        json={
-            "error": {
-                "code": "rate_limited",
-                "message": "plan volume",
-                "requestId": "req_p1",
-                "details": {"reason": "plan_included_volume", "plan": "free"},
-            }
-        },
-        headers={"retry-after": "0"},  # even a short Retry-After: it is the time to the next month in real life
-    )
-    s = Script(stop, httpx.Response(201, json={"event": ENTRY, "balance": 1}))
+# The plan's volume stop is `plan_limit_reached` (402), a non-retryable PlanLimitReached, not
+# Unavailable; a 429 stays a rate limit; project_frozen is its own class, not an AuthError.
+STOP_DETAILS = {"reason": "plan_included_volume", "plan": "free", "resetsAt": "2026-12-01T00:00:00.000Z"}
+
+
+def _error(status: int, code: str, details: dict | None = None, headers: dict | None = None) -> httpx.Response:
+    body: dict = {"error": {"code": code, "message": "m", "requestId": "req_p1"}}
+    if details is not None:
+        body["error"]["details"] = details
+    return httpx.Response(status, json=body, headers=headers or {})
+
+
+def test_the_plan_volume_stop_is_a_plan_limit_error_never_waited_on_or_repeated() -> None:
+    s = Script(_error(402, "plan_limit_reached", STOP_DETAILS), httpx.Response(201, json={"event": ENTRY, "balance": 1}))
     c, slept = client(s)
-    with pytest.raises(Unavailable) as e:
+    with pytest.raises(PlanLimitReached) as e:
         c.usage.record(**RECORD)
-    assert e.value.status == 429 and e.value.details == {"reason": "plan_included_volume", "plan": "free"}
+    assert not isinstance(e.value, (Unavailable, LimitReached))
+    assert e.value.code == "plan_limit_reached" and e.value.status == 402
+    assert e.value.details == STOP_DETAILS
     assert len(s.seen) == 1 and slept == []
+
+
+def test_an_older_servers_plan_stop_429_with_the_reason_is_classified_the_same_way() -> None:
+    # even a short Retry-After: it is the time to the next month in real life
+    s = Script(_error(429, "rate_limited", STOP_DETAILS, {"retry-after": "0"}), httpx.Response(201, json={"event": ENTRY, "balance": 1}))
+    c, slept = client(s)
+    with pytest.raises(PlanLimitReached):
+        c.usage.record(**RECORD)
+    assert len(s.seen) == 1 and slept == []
+
+
+def test_insufficient_credits_stays_limit_reached_and_a_real_429_stays_unavailable() -> None:
+    c, _ = client(Script(_error(402, "insufficient_credits", {"balance": 0, "required": 3})))
+    with pytest.raises(LimitReached) as e:
+        c.usage.record(**RECORD)
+    assert not isinstance(e.value, PlanLimitReached)
+    c2, _ = client(Script(*[_error(429, "rate_limited", {"retryAfterSeconds": 1}, {"retry-after": "1"}) for _ in range(3)]))
+    with pytest.raises(Unavailable):
+        c2.usage.record(**RECORD)
+
+
+def test_project_frozen_is_not_an_auth_error_and_any_other_403_still_is() -> None:
+    c, _ = client(Script(_error(403, "project_frozen", {"reason": "project_frozen"})))
+    with pytest.raises(ProjectFrozen) as e:
+        c.usage.record(**RECORD)
+    assert not isinstance(e.value, AuthError) and e.value.code == "project_frozen" and e.value.status == 403
+    c2, _ = client(Script(_error(403, "missing_scope")))
+    with pytest.raises(AuthError) as e2:
+        c2.usage.record(**RECORD)
+    assert not isinstance(e2.value, ProjectFrozen)
 
 
 def test_the_overage_header_is_surfaced_and_a_replay_is_never_an_overage() -> None:

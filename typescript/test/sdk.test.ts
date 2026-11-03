@@ -5,7 +5,10 @@ import {
   AuthError,
   InvalidRequest,
   LimitReached,
+  PlanLimitReached,
+  ProjectFrozen,
   Unavailable,
+  VunlyError,
   createClient,
   getCustomerUsage,
   normalizeBaseUrl,
@@ -851,23 +854,72 @@ describe("retry classes (conformance/README.md)", () => {
     assert.equal(chk.seen.length, 2);
   });
 
-  it("the plan-volume stop (429, reason plan_included_volume) is never waited on or repeated", async () => {
-    const stop = err(
-      429,
-      "rate_limited",
-      { "Retry-After": "0" },
-      { reason: "plan_included_volume", plan: "free" },
-    );
-    const t = with_([stop, reply(201, { event: ENTRY, balance: 1 })]);
-    await assert.rejects(
-      t.c.usage.record({ id: "req-abc-12345", customer: "c", meter: "tokens", quantity: 1 }),
-      (e: Unavailable) =>
-        e instanceof Unavailable &&
-        e.status === 429 &&
-        e.details?.["reason"] === "plan_included_volume",
-    );
+  // The plan's volume stop is `plan_limit_reached` (402), a non-retryable PlanLimitReached, not
+  // Unavailable; a 429 stays a rate limit. project_frozen is its own class, not an AuthError.
+  const REC = { id: "req-abc-12345", customer: "c", meter: "tokens", quantity: 1 };
+  const stopDetails = {
+    reason: "plan_included_volume",
+    plan: "free",
+    resetsAt: "2026-12-01T00:00:00.000Z",
+  };
+
+  it("the plan-volume stop (402 plan_limit_reached) is a PlanLimitReached: never waited on or repeated, details kept", async () => {
+    const t = with_([
+      err(402, "plan_limit_reached", {}, stopDetails),
+      reply(201, { event: ENTRY, balance: 1 }),
+    ]);
+    await assert.rejects(t.c.usage.record(REC), (e: PlanLimitReached) => {
+      assert.ok(e instanceof PlanLimitReached && e instanceof VunlyError);
+      assert.ok(!(e instanceof Unavailable) && !(e instanceof LimitReached));
+      assert.equal(e.code, "plan_limit_reached");
+      assert.equal(e.status, 402);
+      assert.equal(e.details?.["resetsAt"], "2026-12-01T00:00:00.000Z");
+      return true;
+    });
+    assert.equal(t.seen.length, 1, "sent once");
+    assert.deepEqual(t.slept, [], "no waiting");
+  });
+
+  it("an older server's plan stop (429 rate_limited with reason plan_included_volume) is classified the same way", async () => {
+    const t = with_([
+      err(429, "rate_limited", { "Retry-After": "0" }, stopDetails),
+      reply(201, { event: ENTRY, balance: 1 }),
+    ]);
+    await assert.rejects(t.c.usage.record(REC), PlanLimitReached);
     assert.equal(t.seen.length, 1);
     assert.deepEqual(t.slept, []);
+  });
+
+  it("insufficient_credits stays LimitReached and a real 429 stays Unavailable", async () => {
+    await assert.rejects(
+      with_([err(402, "insufficient_credits", {}, { balance: 0, required: 3 })]).c.usage.record(
+        REC,
+      ),
+      (e: unknown) => e instanceof LimitReached && !(e instanceof PlanLimitReached),
+    );
+    await assert.rejects(
+      with_(
+        Array.from({ length: 3 }, () =>
+          err(429, "rate_limited", { "Retry-After": "1" }, { retryAfterSeconds: 1 }),
+        ),
+      ).c.usage.record(REC),
+      Unavailable,
+    );
+  });
+
+  it("project_frozen (403) is a ProjectFrozen, not an AuthError; any other 403 is still an AuthError", async () => {
+    await assert.rejects(
+      with_([err(403, "project_frozen", {}, { reason: "project_frozen" })]).c.usage.record(REC),
+      (e: unknown) =>
+        e instanceof ProjectFrozen &&
+        !(e instanceof AuthError) &&
+        (e as ProjectFrozen).code === "project_frozen" &&
+        (e as ProjectFrozen).status === 403,
+    );
+    await assert.rejects(
+      with_([err(403, "missing_scope")]).c.usage.record(REC),
+      (e: unknown) => e instanceof AuthError && !(e instanceof ProjectFrozen),
+    );
   });
 
   it("the overage header is surfaced; a replay is never an overage", async () => {

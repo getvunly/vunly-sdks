@@ -82,7 +82,7 @@ npx vunly-verify --meter <your-meter-key>
 
 A custom `fetch` (the `fetch` option) must respect `redirect: "manual"`, which the SDK sets on every request: the SDK never follows a redirect and never sends your key to a redirect target. If your `fetch` follows redirects anyway (`response.redirected` is true), the SDK raises `Unavailable` with code `unexpected_redirect` instead of using the answer; note that your function has already sent the key to the target by then.
 
-Defaults: a 10 second timeout per attempt (`timeoutMs`) and 2 retries (`maxRetries`; `0` turns them off). Retries use the same id. The SDK retries network failures, timeouts, `429` (after `Retry-After`, up to 30 seconds) and `500`, `502`, `503`, `504`; it never retries another `4xx`.
+Defaults: a 10 second timeout per attempt (`timeoutMs`) and 2 retries (`maxRetries`; `0` turns them off). Retries use the same id. The SDK retries network failures, timeouts, `429` (after `Retry-After`, up to 30 seconds) and `500`, `502`, `503`, `504`; it never retries another `4xx`: `402 plan_limit_reached` (`PlanLimitReached`) is not retried before the next UTC month or a plan change, and `402 insufficient_credits` (`LimitReached`) is raised at once.
 
 ```ts
 const vunly = createClient({ apiKey, baseUrl, timeoutMs: 5_000, maxRetries: 3 });
@@ -96,12 +96,66 @@ const vunly = createClient({ apiKey, baseUrl, timeoutMs: 5_000, maxRetries: 3 })
 | `customers.upsert({ id, name? })`                                     | Idempotent create-or-get by your own customer id                                          |
 | `entitlements.check({ customer, feature, estimate? })`                | `{ allowed, reason, remaining, required, plan }`. Fail closed on `Unavailable`            |
 | `usage.record({ id, customer, meter, quantity })`                     | Idempotent by `id`. Debits credits (rounded up per request)                               |
+| `usage.recordBatch([{ id, customer, meter, quantity, occurredAt? }])` | 1 to 100 events in one request; one result per event, in order (see "Batches")            |
+| `usage.batcher(options?)`                                             | A buffer in front of `recordBatch`: `add`, `flush`, `close` (see "Batches")               |
 | `credits.balance({ customer })`                                       | `{ remaining, consumed, granted }`                                                        |
 | `credits.usage({ customer })`                                         | Current-period usage per meter, plan and balance                                          |
 | `credits.grant({ id, customer, credits })`                            | Sandbox top-up (needs `credits:grant`)                                                    |
 | `plans.upsertMeter / upsert / subscribe / cancel`                     | Project setup (needs `plans:write`, `subscriptions:write`)                                |
 | `webhooks.endpoints.*`, `webhooks.deliveries.*`, `verifyWebhook(...)` | Outbound webhook setup, delivery log, and receiving/verifying events (see Webhooks below) |
 | `recipes.list / apply`                                                | Versioned meter+plan templates; `apply` is idempotent (`plans:read` / `plans:write`)      |
+
+## Batches
+
+`usage.recordBatch(events)` sends 1 to 100 events in ONE request and returns one result per event, in order. A request that is
+answered is not an error even when some events are not recorded, so read each `status`. Only `unavailable` is sent again:
+
+| Status                 | Recorded              | Send again?                                                                               |
+| ---------------------- | --------------------- | ----------------------------------------------------------------------------------------- |
+| `accepted`             | yes                   | no                                                                                        |
+| `duplicate`            | already, charged once | no                                                                                        |
+| `unavailable`          | **no**                | **yes**, with the same `id` (the batcher does it for you)                                 |
+| `plan_limit_reached`   | no                    | no: your plan's monthly volume is used up; not before the next UTC month or a plan change |
+| `too_late`             | no                    | no: older than 24 hours, final                                                            |
+| `insufficient_credits` | no                    | no: your customer's balance is too low (not your plan's limits)                           |
+| `meter_not_found`      | no                    | no: create the meter first                                                                |
+| `error`                | no                    | no                                                                                        |
+
+`customer` is the Vunly `cus_...` id that `customers.upsert` returns, not your
+own id. `occurredAt` is when the event happened; if you leave it out the SDK stamps the time you handed the event over and keeps
+that stamp on every resend.
+
+`usage.batcher()` does the buffering for you:
+
+```ts
+const batcher = vunly.usage.batcher({ maxBatchSize: 100, flushIntervalMs: 1000 });
+const outcome = await batcher.add({
+  id: "req_2026_0001",
+  customer: "cus_demo_01",
+  meter: "tokens",
+  quantity: 1050,
+});
+// outcome.status is the final status of THIS event, once its batch has been sent
+await batcher.close(); // flushes what is left; call it before the process ends
+```
+
+It sends up to 100 events at a time and at least every `flushIntervalMs`, sends `unavailable` events again with the same ids
+(waiting at least the `Retry-After`, then backing off, at most `maxAttempts` sends, default 5; after that the event's status is
+`unavailable` and it is not recorded), and holds at most `maxPending` events (default 10,000): past that `add` rejects with
+`Unavailable` instead of queueing without limit. `add` rejects for an invalid event (nothing queued) and when the request as a
+whole fails for a reason a resend cannot fix (`AuthError`, a frozen project). Keep `usage.record` for a one-off call that needs
+its answer in the request.
+
+**Many small batches.** The batch route also has a ceiling on how many _requests_ one project may send, separate from the plan's
+volume: where it is on (today, for allow-listed sandbox projects) it is 1,800 requests per 60 seconds per project and environment, counted
+across every process that uses the project's keys. At 100 events per request that is far above any plan; at one event per
+request it is 30 events a second. So send full batches: one `usage.batcher()` per process (not one per request or per
+customer), a `flushIntervalMs` of a second or more, and let it fill. If your workers are many and small, give each one a
+batcher, not a direct `recordBatch` per event. A refusal for this limit is a `429` with `Retry-After: 60`, longer than the 30
+seconds the SDK waits, so the call raises `Unavailable`; the batcher sends those events again with the same ids, and a direct
+`recordBatch` caller does the same after the wait. Nothing was recorded by a `429`.
+
+**The batch route is not available everywhere yet.** It is off unless the deployment turned it on for your project (today only for allow-listed sandbox projects); until then `recordBatch` throws `InvalidRequest` (`not_found`, 404) and `usage.record` is the way to send usage.
 
 ## Ids
 
@@ -127,12 +181,14 @@ the work (reserve and commit) is not part of this SDK yet.
 
 All extend `VunlyError` and carry a stable `code` and a `requestId`. Messages never contain your key.
 
-| Class            | When                                                                       | What to do                                                                                                     |
-| ---------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `AuthError`      | 401/403: wrong, revoked or under-scoped key                                | Stop. Do not look for another key; ask for the right scope                                                     |
-| `LimitReached`   | 402: not enough credits                                                    | Do not run the work                                                                                            |
-| `InvalidRequest` | 400/404/409: bad input, unknown id or meter (`meter_not_found`), reused id | Fix the request. For `meter_not_found`, create the meter first (`plans.upsertMeter` or a recipe)               |
-| `Unavailable`    | Network failure, 429 or 5xx                                                | Fail closed on `check`; retry `record` with the same `id`. On 429 wait `error.details.retryAfterSeconds` first |
+| Class              | When                                                                                                                               | What to do                                                                                                                                                                                                                               |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AuthError`        | 401/403: wrong, revoked or under-scoped key                                                                                        | Stop. Do not look for another key; ask for the right scope                                                                                                                                                                               |
+| `LimitReached`     | 402 `insufficient_credits`: **your customer's** credit balance is too low. Not your own plan's limits (that is `PlanLimitReached`) | Do not run the work. Top up the customer's credits or move the customer to a plan with more credits                                                                                                                                      |
+| `PlanLimitReached` | 402 `plan_limit_reached`: the plan's monthly volume is used up                                                                     | **Do not retry** (no `Retry-After`; nothing recorded). It clears at `error.details.resetsAt` or on a higher plan. On Free's single-event route `error.details.alternative` is the batch route: use `usage.recordBatch` / `usage.batcher` |
+| `ProjectFrozen`    | 403 `project_frozen`: the project is read-only (beyond the plan's project limit)                                                   | Not a key problem and not retryable: upgrade or choose which projects stay active. Reads still work                                                                                                                                      |
+| `InvalidRequest`   | 400/404/409: bad input, unknown id or meter (`meter_not_found`), reused id                                                         | Fix the request. For `meter_not_found`, create the meter first (`plans.upsertMeter` or a recipe)                                                                                                                                         |
+| `Unavailable`      | Network failure, 429 (a real rate limit) or 5xx                                                                                    | Fail closed on `check`; retry `record` with the same `id`. On 429 wait `error.details.retryAfterSeconds` first                                                                                                                           |
 
 ## Webhooks: receiving events
 
@@ -173,7 +229,7 @@ Rules that keep you correct:
 
 ## Known limitations
 
-Status: **Implemented**. These are the limitations recorded for this SDK. A limitation does not mean the SDK is withdrawn; read it before you use the SDK.
+Status: **Beta**. These are the limitations recorded for this SDK. A limitation does not mean the SDK is withdrawn; read it before you use the SDK.
 
 - Proxy settings and custom certificate authorities are not verified.
 - Run on Linux only; Windows and macOS were not run.

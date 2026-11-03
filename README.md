@@ -10,9 +10,9 @@ Each SDK is written for the Vunly sandbox API. No real payments are made.
 
 | SDK | Status | Versions tested | Known limitations |
 | --- | --- | --- | --- |
-| [TypeScript](typescript/README.md) | Implemented | Node.js 22 and 24 | [2 listed](typescript/README.md#known-limitations) |
-| [Python](python/README.md) | Implemented | Python 3.10 to 3.13 | [3 listed](python/README.md#known-limitations) |
-| [Go](go/README.md) | Implemented | Go 1.26 and 1.27 | [2 listed](go/README.md#known-limitations) |
+| [TypeScript](typescript/README.md) | Beta | Node.js 22 and 24 | [2 listed](typescript/README.md#known-limitations) |
+| [Python](python/README.md) | Beta | Python 3.10 to 3.13 | [3 listed](python/README.md#known-limitations) |
+| [Go](go/README.md) | Beta | Go 1.26 and 1.27 | [2 listed](go/README.md#known-limitations) |
 | [Java](java/README.md) | Implemented | Java 17, 21 and 25 | [4 listed](java/README.md#known-limitations) |
 | [.NET](dotnet/README.md) | Implemented | .NET 8 and 10 | [4 listed](dotnet/README.md#known-limitations) |
 | [Rust](rust/README.md) | Implemented | Rust 1.85 minimum; run on 1.85.1 and 1.99.1 | [4 listed](rust/README.md#known-limitations) |

@@ -6,10 +6,23 @@
 """
 
 from ._core import RetryPolicy, normalize_base_url
+from .batcher import AsyncUsageBatcher, UsageBatcher
 from .client import AsyncClient, Client
-from .errors import AuthError, InvalidRequest, LimitReached, Unavailable, VunlyError
+from .errors import (
+    AuthError,
+    InvalidRequest,
+    LimitReached,
+    PlanLimitReached,
+    ProjectFrozen,
+    Unavailable,
+    VunlyError,
+)
 from .models import (
     Balance,
+    BatchEvent,
+    BatchEventResult,
+    BatchResponse,
+    PlanLimitInfo,
     Customer,
     CustomerToken,
     Entitlement,
@@ -27,7 +40,13 @@ __all__ = [
     "__version__",
     "AsyncClient",
     "AuthError",
+    "AsyncUsageBatcher",
     "Balance",
+    "BatchEvent",
+    "BatchEventResult",
+    "BatchResponse",
+    "PlanLimitInfo",
+    "UsageBatcher",
     "Client",
     "Customer",
     "CustomerToken",
@@ -36,7 +55,9 @@ __all__ = [
     "LedgerEntry",
     "LimitReached",
     "Page",
+    "PlanLimitReached",
     "PlanUsage",
+    "ProjectFrozen",
     "Raw",
     "RetryPolicy",
     "Unavailable",

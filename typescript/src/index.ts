@@ -97,6 +97,87 @@ export interface UsageResult {
   planOverage: boolean;
 }
 
+/** What happened to one event of a batch. `unavailable` means it was NOT recorded and is safe to send again with the same `id`. */
+export type BatchStatus =
+  | "accepted"
+  | "duplicate"
+  | "insufficient_credits"
+  | "too_late"
+  | "meter_not_found"
+  /** The tenant's plan volume for the month is used up (Free stops). Not recorded; do not resend before the next UTC month or an upgrade. */
+  | "plan_limit_reached"
+  | "error"
+  | "unavailable";
+
+/** One usage event of a batch. */
+export interface BatchEvent {
+  /** 8 to 128 characters of `A-Za-z0-9_.:-`. Stable per unit of work: it is what makes a resend safe. */
+  id: string;
+  /** The Vunly customer id (`cus_...`, the `id` that `customers.upsert` returns). The batch route does not take your own external id. */
+  customer: string;
+  meter: string;
+  /** A positive integer in the meter's own units. */
+  quantity: number;
+  /**
+   * When the event happened. Required by the API; if you leave it out the SDK stamps the time you handed the event over and keeps
+   * that stamp for every resend (an event older than 24 hours is `too_late`, so a resend must not look newer than it was).
+   */
+  occurredAt?: Date | string;
+}
+
+export interface BatchEventResult {
+  id: string;
+  status: BatchStatus;
+  /** The customer's balance after this event (present for recorded events). */
+  balance?: number;
+}
+
+export interface PlanLimitInfo {
+  reason: "plan_included_volume";
+  plan: string;
+  includedMonthlyVolume: number;
+  used: number;
+}
+
+export interface BatchResponse {
+  /** One per event, in the order you sent them. */
+  results: BatchEventResult[];
+  /** Present when at least one event is `plan_limit_reached`. */
+  planLimit?: PlanLimitInfo;
+  /** True when a paid plan is past its included volume (it keeps recording). */
+  planOverage: boolean;
+}
+
+export interface BatcherOptions {
+  /** Events per request, 1 to 100. Default 100. A full buffer is sent at once. */
+  maxBatchSize?: number;
+  /** Send what is buffered at least this often, in milliseconds. Default 1000. 0: only when full, on `flush()` or on `close()`. */
+  flushIntervalMs?: number;
+  /** Events held (buffered plus being sent). Past it `add` rejects with `Unavailable` instead of queueing without bound. Default 10000. */
+  maxPending?: number;
+  /** Times one event is sent in all (the first send included) while the API answers `unavailable`. Default 5. */
+  maxAttempts?: number;
+}
+
+/** A buffer in front of `usage.recordBatch`. Create it with `client.usage.batcher()`; call `close()` before the process ends. */
+export interface UsageBatcher {
+  /**
+   * Queues one event and resolves with its FINAL outcome once it has been sent: `accepted`, `duplicate`, `insufficient_credits`,
+   * `too_late`, `meter_not_found`, `plan_limit_reached`, `error`, or `unavailable` when it could not be recorded after
+   * `maxAttempts` sends (it is then not recorded and is safe to send again later with the same `id`). It does not reject for a
+   * per-event outcome. It rejects when the event is invalid (`InvalidRequest`, nothing queued), the batcher is closed or full
+   * (`Unavailable`), or the request as a whole failed for a reason a resend cannot fix (`AuthError`, `InvalidRequest`, `LimitReached`
+   * such as a frozen project).
+   */
+  add(event: BatchEvent): Promise<BatchEventResult>;
+  /** Sends everything buffered now, retrying `unavailable` events, and resolves when each has its final outcome. */
+  flush(): Promise<void>;
+  /** Stops the timer, flushes, and refuses further events. */
+  close(): Promise<void>;
+  /** Events buffered or being sent. */
+  readonly pending: number;
+}
+
 export interface Balance {
   remaining: number;
   consumed: number;
@@ -116,6 +197,10 @@ export type ErrorCode =
   | "subscription_exists"
   | "insufficient_credits"
   | "rate_limited"
+  /** The plan's monthly volume is used up: not retryable until `details.resetsAt` or a higher plan (402). */
+  | "plan_limit_reached"
+  /** The project is read-only (frozen beyond the plan's project limit); upgrading reactivates it. */
+  | "project_frozen"
   | "internal_error"
   | "unavailable"
   /** Raised by the SDK itself (never sent by the API): a 2xx response lacked a promised field. */
@@ -148,6 +233,19 @@ export class VunlyError extends Error {
 export class AuthError extends VunlyError {}
 /** 402: the customer has too few credits. Do not run the work. `details` has `balance` and `required`. */
 export class LimitReached extends VunlyError {}
+/**
+ * 402 `plan_limit_reached`: the plan's monthly usage volume is used up. NOT retryable: nothing was recorded, there is no
+ * `Retry-After`, and waiting does not clear it before `details.resetsAt` (the start of the next UTC month) or an upgrade;
+ * do not treat it as "service unavailable". On the Free plan's single-event route `details.route` is `single` and
+ * `details.alternative` names the batch route (`usage.recordBatch` / `usage.batcher`). `details.reason` is
+ * `plan_included_volume`.
+ */
+export class PlanLimitReached extends VunlyError {}
+/**
+ * 403 `project_frozen`: the project is read-only because it is beyond the plan's project limit. Not retryable and NOT a key
+ * problem (the key is fine): upgrade the plan or choose which projects stay active. Reads keep working.
+ */
+export class ProjectFrozen extends VunlyError {}
 /** 400/404/409: fix the request (bad fields, unknown customer, idempotency id reused with different data). */
 export class InvalidRequest extends VunlyError {}
 /**
@@ -234,7 +332,15 @@ function redirectError(res: Response, key: string): Unavailable {
   );
 }
 
-function classify(status: number, code: ErrorCode): typeof VunlyError {
+function classify(
+  status: number,
+  code: ErrorCode,
+  details?: Record<string, unknown>,
+): typeof VunlyError {
+  // The code decides first. `details.reason` also marks a plan stop answered by a server that still used 429.
+  if (code === "plan_limit_reached" || details?.["reason"] === "plan_included_volume")
+    return PlanLimitReached;
+  if (code === "project_frozen") return ProjectFrozen;
   if (status === 402) return LimitReached;
   if (status === 401 || status === 403) return AuthError;
   if (status === 429 || status >= 500) return Unavailable;
@@ -634,8 +740,10 @@ export interface Client {
       /** Deliver due usage and reconcile the last 24 hours now. */
       run(): Promise<Record<string, unknown>>;
       /**
-       * Fix a mismatch by re-sending its usage and re-checking. The provider dedupes on the ledger entry id, so this
-       * cannot double count. Throws `InvalidRequest` when the provider has MORE than the ledger (needs a manual review).
+       * Re-send the usage rows that FAILED behind an item and re-check it. A row already marked sent was accepted by the
+       * provider and is never re-sent (it would add nothing, and past the provider's duplicate window it would be counted
+       * twice): with no failed row behind the item, `requeued` is 0 and the item stays open for investigation. Throws
+       * `InvalidRequest` when the provider has MORE than the ledger (needs a manual review).
        */
       resend(input: { id: string }): Promise<{ item: ReconciliationItem; requeued: number }>;
     };
@@ -745,6 +853,22 @@ export interface Client {
       meter: string;
       quantity: number;
     }): Promise<UsageResult>;
+    /**
+     * Records 1 to 100 events in ONE request through the batch route (`POST /v1/usage-events:batch`) and returns one result per
+     * event, in order: a request that is answered is not an error even when some events are not recorded, so read each `status`.
+     * Idempotent by each event's `id` for 24 hours. A whole-batch `503` (the metering partitions are behind) is retried with the
+     * same ids after its `Retry-After`, like any retryable call, and surfaces as `Unavailable` when it survives the retries.
+     * Events with status `unavailable` were not recorded: resend only those, with the same ids (`usage.batcher()` does it for
+     * you). The route is OFF unless the deployment turned it on for the project: until then this throws `InvalidRequest`
+     * (`not_found`, 404). `customer` is the Vunly `cus_...` id, not your external id.
+     */
+    recordBatch(events: BatchEvent[]): Promise<BatchResponse>;
+    /**
+     * A buffer in front of `recordBatch`: `add` events as they happen; it sends up to 100 at a time, every `flushIntervalMs`, and
+     * resends `unavailable` events with the same ids (waiting at least `Retry-After`, then backing off, a bounded number of times).
+     * Keep `usage.record` for one-off calls that need the answer in the request.
+     */
+    batcher(options?: BatcherOptions): UsageBatcher;
   };
   credits: {
     balance(input: { customer: string }): Promise<Balance>;
@@ -892,7 +1016,8 @@ export function createClient(options: ClientOptions): Client {
    * id, and only as the operation class allows. R (reads), K (keyed mutations) and N (naturally idempotent writes) are
    * retried after a lost answer, a timeout or a 5xx; X (everything else) only after a 429, which is refused before it
    * runs: a second endpoint, token or checkout is a different outcome, so after an ambiguous failure the caller decides.
-   * A plan-volume stop (429, reason plan_included_volume) is not a rate limit and is never waited on.
+   * A plan-volume stop (`plan_limit_reached`, 402) is `PlanLimitReached`, never `Unavailable`, so it is never retried or
+   * waited on (an older server answered it as a 429 with reason plan_included_volume: that is classified the same way).
    */
   async function call<T>(
     method: string,
@@ -1028,7 +1153,6 @@ export function createClient(options: ClientOptions): Client {
       const key = options.apiKey;
       const rawCode = typeof e?.code === "string" ? scrub(e.code, MAX_CODE_CHARS, key) : "";
       const code = (rawCode || fallbackCode(res.status)) as ErrorCode;
-      const Err = classify(res.status, code);
       const message =
         typeof e?.message === "string" && scrub(e.message, MAX_MESSAGE_CHARS, key)
           ? scrub(e.message, MAX_MESSAGE_CHARS, key)
@@ -1037,6 +1161,7 @@ export function createClient(options: ClientOptions): Client {
         e?.details !== null && typeof e?.details === "object" && !Array.isArray(e.details)
           ? (scrubValue(e.details, key) as Record<string, unknown>)
           : undefined;
+      const Err = classify(res.status, code, details);
       const error = new Err(
         code,
         res.status === 404 && /no such route/i.test(message) ? message + WRONG_ROUTE_HINT : message,
@@ -1070,6 +1195,263 @@ export function createClient(options: ClientOptions): Client {
   }
 
   const enc = encodeURIComponent;
+
+  const BATCH_MAX = 100;
+  const invalid = (field: string, why: string, message: string): InvalidRequest =>
+    new InvalidRequest("validation_error", message, 400, undefined, { fields: { [field]: why } });
+
+  /** The wire form of one event, validated as the route validates it, so a bad event never costs a round trip. */
+  function toWire(e: BatchEvent): {
+    id: string;
+    customerId: string;
+    meter: string;
+    quantity: number;
+    occurredAt: string;
+  } {
+    if (!IDEMPOTENCY_ID.test(e.id))
+      throw invalid(
+        "id",
+        "8-128 chars of A-Za-z0-9_.:-",
+        "id must be 8 to 128 characters of A-Za-z0-9_.:-",
+      );
+    if (!/^cus_[A-Za-z0-9]+$/.test(e.customer) || e.customer.length > 128)
+      throw invalid(
+        "customer",
+        "a Vunly cus_ id",
+        "the batch route takes the Vunly customer id (cus_..., the id customers.upsert returns), not your external id",
+      );
+    if (!/^[a-z0-9][a-z0-9_.-]*$/.test(e.meter) || e.meter.length > 64)
+      throw invalid("meter", "1-64 chars of a-z0-9_.-", "meter is not a valid meter key");
+    if (!Number.isInteger(e.quantity) || e.quantity < 1 || e.quantity > 1_000_000_000)
+      throw invalid(
+        "quantity",
+        "an integer from 1 to 1000000000",
+        "quantity must be an integer from 1 to 1000000000",
+      );
+    const at = e.occurredAt === undefined ? new Date() : new Date(e.occurredAt);
+    if (Number.isNaN(at.getTime()))
+      throw invalid("occurredAt", "a date", "occurredAt is not a valid date");
+    return {
+      id: e.id,
+      customerId: e.customer,
+      meter: e.meter,
+      quantity: e.quantity,
+      occurredAt: at.toISOString(),
+    };
+  }
+
+  type Wire = ReturnType<typeof toWire>;
+
+  async function sendBatch(wire: Wire[]): Promise<BatchResponse> {
+    if (wire.length < 1 || wire.length > BATCH_MAX)
+      throw invalid("events", "1 to 100 events", "a batch holds 1 to 100 events");
+    if (new Set(wire.map((w) => w.id)).size !== wire.length)
+      throw invalid("events", "ids must be distinct", "an event id appears twice in the batch");
+    let r: Called<{ results: BatchEventResult[]; planLimit?: PlanLimitInfo }>;
+    try {
+      r = await call(
+        "POST",
+        "/v1/usage-events:batch",
+        { events: wire },
+        undefined,
+        { results: "array" },
+        "K", // every event carries its own id: asking again after a lost answer records nothing twice
+      );
+    } catch (e) {
+      if (e instanceof InvalidRequest && e.status === 404 && e.code === "not_found")
+        throw new InvalidRequest(
+          e.code,
+          "the batch route is not available for this project (it is off by default and, today, staging only): use usage.record",
+          e.status,
+          e.requestId,
+          e.details,
+        );
+      throw e;
+    }
+    const results = r.data.results;
+    const bad =
+      results.length !== wire.length ||
+      results.some(
+        (x, i) => typeof x?.id !== "string" || x.id !== wire[i]!.id || typeof x.status !== "string",
+      );
+    if (bad)
+      throw new Unavailable(
+        "invalid_response",
+        "the API answered the batch, but its results do not match the events sent (count, order or ids)",
+        r.status,
+      );
+    return {
+      results,
+      ...(r.data.planLimit ? { planLimit: r.data.planLimit } : {}),
+      planOverage: r.headers.get("Vunly-Plan-Overage") === "true",
+    };
+  }
+
+  function batcher(opts: BatcherOptions = {}): UsageBatcher {
+    const size = opts.maxBatchSize ?? BATCH_MAX;
+    const every = opts.flushIntervalMs ?? 1000;
+    const maxPending = opts.maxPending ?? 10_000;
+    const maxAttempts = opts.maxAttempts ?? 5;
+    if (!Number.isInteger(size) || size < 1 || size > BATCH_MAX)
+      throw new RangeError("maxBatchSize must be an integer from 1 to 100");
+    if (!Number.isFinite(every) || every < 0)
+      throw new RangeError("flushIntervalMs must be 0 or more");
+    if (!Number.isInteger(maxPending) || maxPending < 1)
+      throw new RangeError("maxPending must be at least 1");
+    if (!Number.isInteger(maxAttempts) || maxAttempts < 1)
+      throw new RangeError("maxAttempts must be at least 1");
+
+    interface Entry {
+      wire: Wire;
+      attempts: number;
+      resolve: (r: BatchEventResult) => void;
+      reject: (e: unknown) => void;
+      promise: Promise<BatchEventResult>;
+    }
+    let queue: Entry[] = [];
+    /** Entries taken out of the queue and being sent or waiting to be resent. */
+    let inFlight = 0;
+    const byId = new Map<string, Entry>();
+    let closed = false;
+    let running: Promise<void> | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const settle = (en: Entry, fn: () => void): void => {
+      byId.delete(en.wire.id);
+      fn();
+    };
+
+    async function drain(): Promise<void> {
+      while (queue.length > 0) {
+        const taken = queue.splice(0, size);
+        inFlight += taken.length;
+        let retryAfter: number | undefined;
+        let again: Entry[] = [];
+        try {
+          const res = await sendBatch(taken.map((t) => t.wire));
+          taken.forEach((en, i) => {
+            const r = res.results[i]!;
+            if (r.status !== "unavailable") return settle(en, () => en.resolve(r));
+            en.attempts++;
+            if (en.attempts >= maxAttempts) settle(en, () => en.resolve(r));
+            else again.push(en);
+          });
+        } catch (e) {
+          if (
+            e instanceof Unavailable &&
+            e.code !== "invalid_response" &&
+            e.code !== "unexpected_redirect"
+          ) {
+            // the whole request could not be answered (a 503 that survived the client's retries, a network failure): nothing was
+            // confirmed, so every event is resent with its id, and counts the attempt
+            retryAfter = e.retryAfterSeconds;
+            for (const en of taken) {
+              en.attempts++;
+              if (en.attempts >= maxAttempts)
+                settle(en, () => en.resolve({ id: en.wire.id, status: "unavailable" }));
+              else again.push(en);
+            }
+          } else {
+            // a failure a resend cannot fix (key, frozen project, a route that is off, a malformed answer): each event learns it
+            for (const en of taken) settle(en, () => en.reject(e));
+          }
+        }
+        inFlight -= taken.length;
+        if (again.length > 0) {
+          const attempt = Math.max(...again.map((a) => a.attempts));
+          const wait = retryDelay(attempt, retryAfter);
+          if (wait === null) {
+            // a Retry-After longer than the SDK will wait: surface them as not recorded, never sit on them
+            for (const en of again)
+              settle(en, () => en.resolve({ id: en.wire.id, status: "unavailable" }));
+          } else {
+            inFlight += again.length;
+            await sleep(wait * 1000);
+            inFlight -= again.length;
+            queue = [...again, ...queue];
+          }
+        }
+      }
+    }
+
+    function flush(): Promise<void> {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      if (!running)
+        running = drain().finally(() => {
+          running = null;
+          if (queue.length > 0 && !closed) arm();
+        });
+      return running;
+    }
+
+    function arm(): void {
+      if (timer || every === 0 || closed) return;
+      timer = setTimeout(() => {
+        timer = null;
+        void flush().catch(() => undefined);
+      }, every);
+      // not unref'd on purpose: a script that awaits `add` must not exit before the buffer is sent. The timer only exists while
+      // something is buffered, so it keeps the process alive for at most `flushIntervalMs`.
+    }
+
+    return {
+      add(event: BatchEvent): Promise<BatchEventResult> {
+        try {
+          if (closed) throw new Unavailable("unavailable", "the batcher is closed", 0);
+          const wire = toWire(event);
+          const known = byId.get(wire.id);
+          if (known) {
+            if (
+              known.wire.customerId !== wire.customerId ||
+              known.wire.meter !== wire.meter ||
+              known.wire.quantity !== wire.quantity
+            )
+              throw new InvalidRequest(
+                "idempotency_conflict",
+                "this id is already queued with a different customer, meter or quantity",
+                409,
+              );
+            return known.promise; // the same event added twice: one send, one outcome
+          }
+          if (queue.length + inFlight >= maxPending)
+            throw new Unavailable(
+              "unavailable",
+              `the batcher already holds ${maxPending} events: slow down or flush`,
+              0,
+            );
+          let resolve!: Entry["resolve"];
+          let reject!: Entry["reject"];
+          const promise = new Promise<BatchEventResult>((a, b) => {
+            resolve = a;
+            reject = b;
+          });
+          const en: Entry = { wire, attempts: 0, resolve, reject, promise };
+          byId.set(wire.id, en);
+          queue.push(en);
+          if (queue.length >= size) void flush().catch(() => undefined);
+          else arm();
+          return promise;
+        } catch (e) {
+          return Promise.reject(e);
+        }
+      },
+      flush,
+      async close() {
+        closed = true;
+        if (timer) {
+          clearTimeout(timer);
+          timer = null;
+        }
+        await flush();
+      },
+      get pending() {
+        return queue.length + inFlight;
+      },
+    };
+  }
 
   async function exportCsv(
     which: "ledger" | "usage" | "customers",
@@ -1399,6 +1781,8 @@ export function createClient(options: ClientOptions): Client {
           planOverage: !r.replayed && r.headers.get("Vunly-Plan-Overage") === "true",
         };
       },
+      recordBatch: async (events) => sendBatch(events.map(toWire)),
+      batcher,
     },
     planUsage: async () =>
       (
